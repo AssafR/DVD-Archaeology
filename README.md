@@ -39,7 +39,7 @@ This project focuses on **structure recovery**, not media restoration. By defaul
 - Replace general-purpose ripping or transcoding tools  
 
 Because the extraction pipeline relies on FFmpeg, **optional stream repair and normalization may be exposed as an opt-in step** for discs with minor corruption or timing issues.
-
+*FFmpeg may repair the video stream, but episode boundaries always come from the DVD menu — never from heuristics.*
 The primary goal remains unchanged: **recovering episode structure from existing DVD navigation data**, not repairing broken media.
 
 ---
@@ -53,4 +53,4 @@ The primary goal remains unchanged: **recovering episode structure from existing
 
 ---
 
-*FFmpeg may repair the video stream, but episode boundaries always come from the DVD menu — never from heuristics.*
+
