@@ -14,17 +14,31 @@ from dvdmenu_extract.util.paths import sanitize_filename
 def _run_stub(menu_images: MenuImagesModel) -> OcrModel:
     entries: list[OcrEntryModel] = []
     for image in menu_images.images:
-        txt_path = menu_buttons_dir() / f"{image.button_id}.txt"
-        if not txt_path.is_file():
-            raise ValidationError(f"Missing OCR fixture: {txt_path}")
-        raw_text = txt_path.read_text(encoding="utf-8-sig").strip()
-        cleaned = sanitize_filename(raw_text)
+        txt_path = menu_buttons_dir() / f"{image.entry_id}.txt"
+        if txt_path.is_file():
+            raw_text = txt_path.read_text(encoding="utf-8-sig").strip()
+        else:
+            if image.menu_id and image.menu_id.startswith("svcd"):
+                raw_text = ""
+            else:
+                raise ValidationError(f"Missing OCR fixture: {txt_path}")
+        spu_text_nonempty = raw_text != ""
+        background_attempted = not spu_text_nonempty
+        source = "spu" if spu_text_nonempty else "background"
+        cleaned = (
+            sanitize_filename(raw_text)
+            if raw_text
+            else sanitize_filename(f"untitled_{image.entry_id}")
+        )
         entries.append(
             OcrEntryModel(
-                button_id=image.button_id,
+                entry_id=image.entry_id,
                 raw_text=raw_text,
                 cleaned_label=cleaned,
                 confidence=0.9,
+                source=source,
+                background_attempted=background_attempted,
+                spu_text_nonempty=spu_text_nonempty,
             )
         )
     return OcrModel(results=entries)
@@ -47,13 +61,23 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         raw_text = pytesseract.image_to_string(
             Image.open(image_path), lang=ocr_lang
         ).strip()
-        cleaned = sanitize_filename(raw_text)
+        spu_text_nonempty = False
+        background_attempted = True
+        source = "background"
+        cleaned = (
+            sanitize_filename(raw_text)
+            if raw_text
+            else sanitize_filename(f"untitled_{image.entry_id}")
+        )
         entries.append(
             OcrEntryModel(
-                button_id=image.button_id,
+                entry_id=image.entry_id,
                 raw_text=raw_text,
                 cleaned_label=cleaned,
                 confidence=0.0,
+                source=source,
+                background_attempted=background_attempted,
+                spu_text_nonempty=spu_text_nonempty,
             )
         )
     return OcrModel(results=entries)

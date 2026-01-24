@@ -8,6 +8,8 @@ from tests.helpers import fixtures_dir, load_expected_json
 
 
 def _schema_view(value):
+    if value is None:
+        return "null"
     if isinstance(value, dict):
         return {key: _schema_view(value[key]) for key in sorted(value.keys())}
     if isinstance(value, list):

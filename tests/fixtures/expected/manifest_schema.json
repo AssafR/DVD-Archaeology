@@ -2,7 +2,7 @@
   "extract": {
     "outputs": {
       "__list__": {
-        "button_id": "str",
+        "entry_id": "str",
         "output_path": "str",
         "status": "str"
       }
@@ -13,7 +13,51 @@
     "disc_type_guess": "str",
     "has_video_ts": "bool",
     "input_path": "str",
-    "video_ts_path": "str"
+    "video_ts_path": "str",
+    "video_ts_report": {
+      "bup_total_bytes": "int",
+      "file_count": "int",
+      "files": {
+        "__list__": {
+          "name": "str",
+          "size_bytes": "int"
+        }
+      },
+      "ifo_total_bytes": "int",
+      "total_bytes": "int",
+      "vob_total_bytes": "int",
+      "vts_title_count": "int"
+    },
+    "disc_report": {
+      "directories": {
+        "__list__": "str"
+      },
+      "disc_format": "str",
+      "file_count": "int",
+      "files": {
+        "__list__": {
+          "path": "str",
+          "size_bytes": "int"
+        }
+      },
+      "mpeg2_file_count": "null",
+      "mpeg2_total_bytes": "null",
+      "total_bytes": "int",
+      "video_ts_report": {
+        "bup_total_bytes": "int",
+        "file_count": "int",
+        "files": {
+          "__list__": {
+            "name": "str",
+            "size_bytes": "int"
+          }
+        },
+        "ifo_total_bytes": "int",
+        "total_bytes": "int",
+        "vob_total_bytes": "int",
+        "vts_title_count": "int"
+      }
+    }
   },
   "inputs": {
     "input_path": "str",
@@ -22,71 +66,94 @@
   "menu_images": {
     "images": {
       "__list__": {
-        "button_id": "str",
+        "entry_id": "str",
         "image_path": "str",
         "menu_id": "str"
       }
     }
   },
   "menu_map": {
-    "menus": {
+    "entries": {
       "__list__": {
-        "buttons": {
-          "__list__": {
-            "button_id": "str",
-            "rect": {
-              "h": "int",
-              "w": "int",
-              "x": "int",
-              "y": "int"
-            },
-            "target": {
-              "cell_id": "int",
-              "pgc_id": "int",
-              "title_id": "int"
-            }
-          }
+        "entry_id": "str",
+        "highlight_rect": {
+          "h": "int",
+          "w": "int",
+          "x": "int",
+          "y": "int"
         },
-        "menu_id": "str"
+        "menu_id": "str",
+        "rect": {
+          "h": "int",
+          "w": "int",
+          "x": "int",
+          "y": "int"
+        },
+        "selection_rect": {
+          "h": "int",
+          "w": "int",
+          "x": "int",
+          "y": "int"
+        },
+        "target": {
+          "cell_id": "int",
+          "end_time": "null",
+          "item_no": "null",
+          "kind": "str",
+          "pgc_id": "int",
+          "start_time": "null",
+          "title_id": "int",
+          "track_no": "null"
+        },
+        "visuals": {
+          "__list__": "empty"
+        }
       }
     }
   },
   "nav": {
-    "menu_domains": {
-      "__list__": "str"
-    },
-    "titles": {
-      "__list__": {
-        "pgcs": {
-          "__list__": {
-            "cells": {
-              "__list__": {
-                "cell_id": "int",
-                "end_time": "float",
-                "start_time": "float"
-              }
-            },
-            "pgc_id": "int"
-          }
-        },
-        "title_id": "int"
+    "disc_format": "str",
+    "dvd": {
+      "menu_domains": {
+        "__list__": "str"
+      },
+      "titles": {
+        "__list__": {
+          "pgcs": {
+            "__list__": {
+              "cells": {
+                "__list__": {
+                  "cell_id": "int",
+                  "end_time": "float",
+                  "start_time": "float"
+                }
+              },
+              "pgc_id": "int"
+            }
+          },
+          "title_id": "int"
+        }
       }
-    }
+    },
+    "svcd": "null"
   },
   "ocr": {
     "results": {
       "__list__": {
-        "button_id": "str",
+        "entry_id": "str",
+        "background_attempted": "bool",
         "cleaned_label": "str",
         "confidence": "float",
-        "raw_text": "str"
+        "raw_text": "str",
+        "source": "str",
+        "spu_text_nonempty": "bool"
       }
     }
   },
   "segments": {
     "segments": {
       "__list__": {
-        "button_id": "str",
+        "entry_id": "str",
         "end_time": "float",
         "start_time": "float"
       }

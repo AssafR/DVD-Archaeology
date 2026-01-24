@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from dvdmenu_extract.models.menu import MenuMapModel
-from dvdmenu_extract.models.nav import NavModel
+from dvdmenu_extract.models.nav import NavigationModel
 from dvdmenu_extract.models.segments import SegmentsModel
 from dvdmenu_extract.util.assertx import ValidationError
 from dvdmenu_extract.util.fixtures import expected_dir
@@ -13,7 +13,20 @@ from dvdmenu_extract.util.io import read_json, write_json
 
 def run(menu_map_path: Path, nav_path: Path, out_dir: Path) -> SegmentsModel:
     _menu_map = read_json(menu_map_path, MenuMapModel)
-    read_json(nav_path, NavModel)
+    nav = read_json(nav_path, NavigationModel)
+    if nav.disc_format == "SVCD" and nav.svcd is not None:
+        segments = [
+            {"entry_id": f"track_{track.track_no:02d}", "start_time": 0.0, "end_time": 600.0}
+            for track in nav.svcd.tracks
+        ]
+        model = SegmentsModel.model_validate({"segments": segments})
+        menu_entry_ids = {entry.entry_id for entry in _menu_map.entries}
+        for entry in model.segments:
+            if entry.entry_id not in menu_entry_ids:
+                raise ValidationError("segments include unknown entry_id")
+        write_json(out_dir / "segments.json", model)
+        return model
+
     fixture_path = expected_dir() / "segments.json"
     if not fixture_path.is_file():
         raise ValidationError(f"Missing segments fixture: {fixture_path}")
@@ -21,12 +34,10 @@ def run(menu_map_path: Path, nav_path: Path, out_dir: Path) -> SegmentsModel:
         payload = json.load(handle)
     model = SegmentsModel.model_validate(payload)
 
-    menu_button_ids = {
-        button.button_id for menu in _menu_map.menus for button in menu.buttons
-    }
+    menu_entry_ids = {entry.entry_id for entry in _menu_map.entries}
     for entry in model.segments:
-        if entry.button_id not in menu_button_ids:
-            raise ValidationError("segments include unknown button_id")
+        if entry.entry_id not in menu_entry_ids:
+            raise ValidationError("segments include unknown entry_id")
 
     write_json(out_dir / "segments.json", model)
     return model

@@ -15,3 +15,9 @@ def test_stage_ingest(tmp_path: Path) -> None:
     assert isinstance(result, IngestModel)
     assert result.disc_type_guess == "DVD"
     assert result.has_video_ts is True
+    assert result.video_ts_report is not None
+    assert result.video_ts_report.file_count >= 1
+    assert (tmp_path / "video_ts_report.json").is_file()
+    assert result.disc_report is not None
+    assert result.disc_report.disc_format == "DVD"
+    assert (tmp_path / "disc_report.json").is_file()

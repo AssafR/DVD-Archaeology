@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class SegmentEntryModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    button_id: str
+    entry_id: str
     start_time: float = Field(..., ge=0.0)
     end_time: float = Field(..., ge=0.0)
 
@@ -24,7 +24,7 @@ class SegmentsModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "SegmentsModel":
-        button_ids = [entry.button_id for entry in self.segments]
-        if len(button_ids) != len(set(button_ids)):
-            raise ValueError("button_id must be unique in segments")
+        entry_ids = [entry.entry_id for entry in self.segments]
+        if len(entry_ids) != len(set(entry_ids)):
+            raise ValueError("entry_id must be unique in segments")
         return self

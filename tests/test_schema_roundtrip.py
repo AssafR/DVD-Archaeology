@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from dvdmenu_extract.models.menu import MenuMapModel
-from dvdmenu_extract.models.nav import NavModel
+from dvdmenu_extract.models.nav import NavigationModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
 from dvdmenu_extract.util.io import read_json, write_json
@@ -11,9 +11,9 @@ from tests.helpers import load_expected_json
 
 
 def test_schema_roundtrip_nav(tmp_path: Path) -> None:
-    model = NavModel.model_validate(load_expected_json("nav.json"))
+    model = NavigationModel.model_validate(load_expected_json("nav.json"))
     write_json(tmp_path / "nav.json", model)
-    roundtrip = read_json(tmp_path / "nav.json", NavModel)
+    roundtrip = read_json(tmp_path / "nav.json", NavigationModel)
     assert roundtrip.model_dump(mode="json") == model.model_dump(mode="json")
 
 

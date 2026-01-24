@@ -7,7 +7,7 @@ from pathlib import Path
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.models.manifest import ExtractModel, ManifestModel
 from dvdmenu_extract.models.menu import MenuImagesModel, MenuMapModel
-from dvdmenu_extract.models.nav import NavModel
+from dvdmenu_extract.models.nav import NavigationModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
 from dvdmenu_extract.stages import (
@@ -37,7 +37,7 @@ STAGES = [
 ]
 
 STAGE_OUTPUTS = {
-    "ingest": ["ingest.json"],
+    "ingest": ["ingest.json", "video_ts_report.json", "disc_report.json"],
     "nav_parse": ["nav.json"],
     "menu_map": ["menu_map.json"],
     "menu_images": ["menu_images.json"],
@@ -140,7 +140,7 @@ def run_pipeline(
                 stage_status[stage_name] = "ok"
         elif stage_name == "nav_parse":
             if not options.force and (out_dir / "nav.json").is_file():
-                read_json(out_dir / "nav.json", NavModel)
+                read_json(out_dir / "nav.json", NavigationModel)
                 stage_status[stage_name] = "cached"
             else:
                 nav_parse_stage.run(out_dir / "ingest.json", out_dir)

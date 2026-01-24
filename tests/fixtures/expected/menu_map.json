@@ -1,24 +1,58 @@
 {
-  "menus": [
+  "entries": [
     {
+      "entry_id": "btn1",
       "menu_id": "menu_root",
-      "buttons": [
-        {
-          "button_id": "btn1",
-          "rect": {"x": 10, "y": 10, "w": 100, "h": 30},
-          "target": {"title_id": 1, "pgc_id": 1, "cell_id": 1}
-        },
-        {
-          "button_id": "btn2",
-          "rect": {"x": 10, "y": 50, "w": 100, "h": 30},
-          "target": {"title_id": 1, "pgc_id": 1, "cell_id": 2}
-        },
-        {
-          "button_id": "btn3",
-          "rect": {"x": 10, "y": 90, "w": 100, "h": 30},
-          "target": {"title_id": 1, "pgc_id": 1, "cell_id": 3}
-        }
-      ]
+      "rect": {"x": 10, "y": 10, "w": 100, "h": 30},
+      "selection_rect": {"x": 10, "y": 10, "w": 100, "h": 30},
+      "highlight_rect": {"x": 10, "y": 10, "w": 100, "h": 30},
+      "visuals": [],
+      "target": {
+        "kind": "dvd_cell",
+        "title_id": 1,
+        "pgc_id": 1,
+        "cell_id": 1,
+        "track_no": null,
+        "item_no": null,
+        "start_time": null,
+        "end_time": null
+      }
+    },
+    {
+      "entry_id": "btn2",
+      "menu_id": "menu_root",
+      "rect": {"x": 10, "y": 50, "w": 100, "h": 30},
+      "selection_rect": {"x": 10, "y": 50, "w": 100, "h": 30},
+      "highlight_rect": {"x": 10, "y": 50, "w": 100, "h": 30},
+      "visuals": [],
+      "target": {
+        "kind": "dvd_cell",
+        "title_id": 1,
+        "pgc_id": 1,
+        "cell_id": 2,
+        "track_no": null,
+        "item_no": null,
+        "start_time": null,
+        "end_time": null
+      }
+    },
+    {
+      "entry_id": "btn3",
+      "menu_id": "menu_root",
+      "rect": {"x": 10, "y": 90, "w": 100, "h": 30},
+      "selection_rect": {"x": 10, "y": 90, "w": 100, "h": 30},
+      "highlight_rect": {"x": 10, "y": 90, "w": 100, "h": 30},
+      "visuals": [],
+      "target": {
+        "kind": "dvd_cell",
+        "title_id": 1,
+        "pgc_id": 1,
+        "cell_id": 3,
+        "track_no": null,
+        "item_no": null,
+        "start_time": null,
+        "end_time": null
+      }
     }
   ]
 }

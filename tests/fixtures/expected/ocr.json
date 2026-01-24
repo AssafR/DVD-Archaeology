@@ -1,22 +1,31 @@
 {
   "results": [
     {
-      "button_id": "btn1",
+      "entry_id": "btn1",
       "raw_text": "Episode 1",
       "cleaned_label": "Episode_1",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "source": "spu",
+      "background_attempted": false,
+      "spu_text_nonempty": true
     },
     {
-      "button_id": "btn2",
+      "entry_id": "btn2",
       "raw_text": "פרק 2",
       "cleaned_label": "פרק_2",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "source": "spu",
+      "background_attempted": false,
+      "spu_text_nonempty": true
     },
     {
-      "button_id": "btn3",
+      "entry_id": "btn3",
       "raw_text": "Episode 3",
       "cleaned_label": "Episode_3",
-      "confidence": 0.9
+      "confidence": 0.9,
+      "source": "spu",
+      "background_attempted": false,
+      "spu_text_nonempty": true
     }
   ]
 }

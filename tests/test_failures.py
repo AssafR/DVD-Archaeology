@@ -26,22 +26,43 @@ def test_missing_upstream_artifact_raises(tmp_path: Path) -> None:
 
 def test_duplicate_button_ids_rejected(tmp_path: Path) -> None:
     payload = {
-        "menus": [
+        "entries": [
             {
+                "entry_id": "btn1",
                 "menu_id": "menu_root",
-                "buttons": [
-                    {
-                        "button_id": "btn1",
-                        "rect": {"x": 0, "y": 0, "w": 10, "h": 10},
-                        "target": {"title_id": 1, "pgc_id": 1, "cell_id": 1},
-                    },
-                    {
-                        "button_id": "btn1",
-                        "rect": {"x": 0, "y": 0, "w": 10, "h": 10},
-                        "target": {"title_id": 1, "pgc_id": 1, "cell_id": 2},
-                    },
-                ],
-            }
+                "rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+                "selection_rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+                "highlight_rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+                "visuals": [],
+                "target": {
+                    "kind": "dvd_cell",
+                    "title_id": 1,
+                    "pgc_id": 1,
+                    "cell_id": 1,
+                    "track_no": None,
+                    "item_no": None,
+                    "start_time": None,
+                    "end_time": None,
+                },
+            },
+            {
+                "entry_id": "btn1",
+                "menu_id": "menu_root",
+                "rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+                "selection_rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+                "highlight_rect": {"x": 0, "y": 0, "w": 10, "h": 10},
+                "visuals": [],
+                "target": {
+                    "kind": "dvd_cell",
+                    "title_id": 1,
+                    "pgc_id": 1,
+                    "cell_id": 2,
+                    "track_no": None,
+                    "item_no": None,
+                    "start_time": None,
+                    "end_time": None,
+                },
+            },
         ]
     }
     with pytest.raises(PydanticValidationError):
@@ -49,6 +70,6 @@ def test_duplicate_button_ids_rejected(tmp_path: Path) -> None:
 
 
 def test_negative_timestamps_rejected(tmp_path: Path) -> None:
-    payload = {"segments": [{"button_id": "btn1", "start_time": -1.0, "end_time": 1.0}]}
+    payload = {"segments": [{"entry_id": "btn1", "start_time": -1.0, "end_time": 1.0}]}
     with pytest.raises(PydanticValidationError):
         SegmentsModel.model_validate(payload)
