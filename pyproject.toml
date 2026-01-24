@@ -15,6 +15,13 @@ dev = ["pytest>=7.4"]
 [project.scripts]
 dvdmenu-extract = "dvdmenu_extract.cli:app"
 
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = true
+
 [dependency-groups]
 dev = [
     "pytest>=7.4",
