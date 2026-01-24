@@ -38,9 +38,9 @@ This project focuses on **structure recovery**, not media restoration. By defaul
 - Guess episode boundaries when navigation data is missing  
 - Replace general-purpose ripping or transcoding tools  
 
-Because the extraction pipeline relies on FFmpeg, **optional stream repair and normalization may be exposed as an opt-in step** for discs with minor corruption or timing issues.
-
 ### Note:
+
+Because the extraction pipeline relies on FFmpeg, **optional stream repair and normalization may be exposed as an opt-in step** for discs with minor corruption or timing issues.
 
 *FFmpeg may repair the video stream, but episode boundaries always come from the DVD menu — never from heuristics.*
 
