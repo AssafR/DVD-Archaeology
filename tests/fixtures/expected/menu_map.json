@@ -2,10 +2,10 @@
   "entries": [
     {
       "entry_id": "btn1",
-      "menu_id": "menu_root",
-      "rect": {"x": 10, "y": 10, "w": 100, "h": 30},
-      "selection_rect": {"x": 10, "y": 10, "w": 100, "h": 30},
-      "highlight_rect": {"x": 10, "y": 10, "w": 100, "h": 30},
+      "menu_id": "dvd_root",
+      "rect": null,
+      "selection_rect": null,
+      "highlight_rect": null,
       "visuals": [],
       "target": {
         "kind": "dvd_cell",
@@ -20,10 +20,10 @@
     },
     {
       "entry_id": "btn2",
-      "menu_id": "menu_root",
-      "rect": {"x": 10, "y": 50, "w": 100, "h": 30},
-      "selection_rect": {"x": 10, "y": 50, "w": 100, "h": 30},
-      "highlight_rect": {"x": 10, "y": 50, "w": 100, "h": 30},
+      "menu_id": "dvd_root",
+      "rect": null,
+      "selection_rect": null,
+      "highlight_rect": null,
       "visuals": [],
       "target": {
         "kind": "dvd_cell",
@@ -38,10 +38,10 @@
     },
     {
       "entry_id": "btn3",
-      "menu_id": "menu_root",
-      "rect": {"x": 10, "y": 90, "w": 100, "h": 30},
-      "selection_rect": {"x": 10, "y": 90, "w": 100, "h": 30},
-      "highlight_rect": {"x": 10, "y": 90, "w": 100, "h": 30},
+      "menu_id": "dvd_root",
+      "rect": null,
+      "selection_rect": null,
+      "highlight_rect": null,
       "visuals": [],
       "target": {
         "kind": "dvd_cell",

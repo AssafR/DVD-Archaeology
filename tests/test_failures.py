@@ -21,6 +21,8 @@ def test_missing_upstream_artifact_raises(tmp_path: Path) -> None:
         use_real_ffmpeg=False,
         repair="off",
         force=False,
+        json_out_root=False,
+        json_root_dir=False,
     )
     with pytest.raises(ValidationError):
         run_pipeline(input_path=tmp_path, out_dir=tmp_path, options=options, stage="menu_map")
@@ -35,6 +37,8 @@ def test_ingest_input_mismatch_raises(tmp_path: Path) -> None:
         use_real_ffmpeg=False,
         repair="off",
         force=False,
+        json_out_root=False,
+        json_root_dir=False,
     )
     with pytest.raises(ValidationError):
         run_pipeline(
@@ -43,6 +47,44 @@ def test_ingest_input_mismatch_raises(tmp_path: Path) -> None:
             options=options,
             stage="nav_parse",
         )
+
+
+def test_stage_and_until_conflict(tmp_path: Path) -> None:
+    options = PipelineOptions(
+        ocr_lang="eng+heb",
+        use_real_ocr=False,
+        use_real_ffmpeg=False,
+        repair="off",
+        force=False,
+        json_out_root=False,
+        json_root_dir=False,
+    )
+    with pytest.raises(ValidationError):
+        run_pipeline(
+            input_path=tmp_path,
+            out_dir=tmp_path,
+            options=options,
+            stage="ingest",
+            until="segments",
+        )
+
+
+def test_until_does_not_require_finalize(tmp_path: Path) -> None:
+    options = PipelineOptions(
+        ocr_lang="eng+heb",
+        use_real_ocr=False,
+        use_real_ffmpeg=False,
+        repair="off",
+        force=True,
+        json_out_root=False,
+        json_root_dir=False,
+    )
+    run_pipeline(
+        input_path=tmp_path,
+        out_dir=tmp_path,
+        options=options,
+        until="menu_map",
+    )
 
 
 def test_duplicate_button_ids_rejected(tmp_path: Path) -> None:

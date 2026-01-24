@@ -1,0 +1,37 @@
+{
+  "disc_format": "DVD",
+  "dvd": {
+    "titles": [
+      {
+        "title_id": 1,
+        "pgcs": [
+          {
+            "pgc_id": 1,
+            "cells": [
+              {
+                "cell_id": 1,
+                "start_time": 0.0,
+                "end_time": 600.0
+              },
+              {
+                "cell_id": 2,
+                "start_time": 600.0,
+                "end_time": 1200.0
+              },
+              {
+                "cell_id": 3,
+                "start_time": 1200.0,
+                "end_time": 1800.0
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "menu_domains": [
+      "VMGM"
+    ]
+  },
+  "svcd": null,
+  "vcd": null
+}

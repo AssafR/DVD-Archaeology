@@ -47,6 +47,8 @@ def test_external_svcd_pipeline_stub(tmp_path: Path) -> None:
         use_real_ffmpeg=False,
         repair="off",
         force=True,
+        json_out_root=False,
+        json_root_dir=False,
     )
     run_pipeline(input_path=EXTERNAL_SVCD, out_dir=tmp_path, options=options)
     nav = read_json(tmp_path / "nav.json", NavigationModel)

@@ -23,8 +23,11 @@ def main(
     use_real_ffmpeg: bool = typer.Option(False, "--use-real-ffmpeg"),
     repair: str = typer.Option("off", "--repair"),
     stage: Optional[str] = typer.Option(None, "--stage"),
+    until: Optional[str] = typer.Option(None, "--until"),
     force: bool = typer.Option(False, "--force"),
     list_stages: bool = typer.Option(False, "--list-stages"),
+    json_out_root: bool = typer.Option(False, "--json-out-root"),
+    json_root_dir: bool = typer.Option(False, "--json-root-dir"),
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if list_stages:
@@ -34,6 +37,9 @@ def main(
     if input_path is None or out is None:
         typer.echo("Error: input_path and --out are required unless --list-stages")
         raise typer.Exit(code=2)
+    if stage and until:
+        typer.echo("Error: use --stage or --until, not both")
+        raise typer.Exit(code=2)
 
     options = PipelineOptions(
         ocr_lang=ocr_lang,
@@ -41,9 +47,17 @@ def main(
         use_real_ffmpeg=use_real_ffmpeg,
         repair=repair,
         force=force,
+        json_out_root=json_out_root,
+        json_root_dir=json_root_dir,
     )
     try:
-        run_pipeline(input_path=input_path, out_dir=out, options=options, stage=stage)
+        run_pipeline(
+            input_path=input_path,
+            out_dir=out,
+            options=options,
+            stage=stage,
+            until=until,
+        )
     except ValidationError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc

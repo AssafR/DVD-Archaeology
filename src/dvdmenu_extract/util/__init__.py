@@ -5,4 +5,5 @@ __all__ = [
     "schemas",
     "video_tracks",
     "vcd_directory",
+    "export",
 ]

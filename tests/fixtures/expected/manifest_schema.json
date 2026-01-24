@@ -82,25 +82,10 @@
     "entries": {
       "__list__": {
         "entry_id": "str",
-        "highlight_rect": {
-          "h": "int",
-          "w": "int",
-          "x": "int",
-          "y": "int"
-        },
+        "highlight_rect": "null",
         "menu_id": "str",
-        "rect": {
-          "h": "int",
-          "w": "int",
-          "x": "int",
-          "y": "int"
-        },
-        "selection_rect": {
-          "h": "int",
-          "w": "int",
-          "x": "int",
-          "y": "int"
-        },
+        "rect": "null",
+        "selection_rect": "null",
         "target": {
           "cell_id": "int",
           "end_time": "null",
@@ -184,6 +169,7 @@
     "menu_map": "str",
     "nav_parse": "str",
     "ocr": "str",
+    "timing": "str",
     "segments": "str"
   }
 }

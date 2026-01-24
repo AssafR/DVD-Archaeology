@@ -1,0 +1,17 @@
+{
+  "stage": "nav_parse",
+  "started_at": "2026-01-24T19:52:41.815760+00:00",
+  "finished_at": "2026-01-24T19:52:41.816760+00:00",
+  "duration_ms": 1,
+  "inputs": [
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\ingest.json"
+  ],
+  "outputs": [
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\nav.json",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\nav_summary.json",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\svcd_nav.json",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\vcd_nav.json",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\raw\\vcd-info.stdout.txt",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\raw\\vcd-info.stderr.txt"
+  ]
+}

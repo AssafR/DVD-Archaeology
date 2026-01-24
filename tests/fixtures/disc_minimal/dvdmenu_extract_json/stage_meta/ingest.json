@@ -1,0 +1,12 @@
+{
+  "stage": "ingest",
+  "started_at": "2026-01-24T19:52:41.794242+00:00",
+  "finished_at": "2026-01-24T19:52:41.803760+00:00",
+  "duration_ms": 9,
+  "inputs": [],
+  "outputs": [
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\ingest.json",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\video_ts_report.json",
+    "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\dvdmenu_extract_json\\disc_report.json"
+  ]
+}

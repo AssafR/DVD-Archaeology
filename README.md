@@ -73,6 +73,12 @@ Run a single stage (expects upstream artifacts in `--out`):
 uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> --stage ocr
 ```
 
+Run up to a stage (inclusive):
+
+```bash
+uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> --until segments
+```
+
 ---
 
 ## Pipeline stage order
@@ -82,11 +88,12 @@ Current order:
 1. `ingest`
 2. `nav_parse`
 3. `menu_map`
-4. `segments`
-5. `extract`
-6. `menu_images`
-7. `ocr`
-8. `finalize`
+4. `timing`
+5. `segments`
+6. `extract`
+7. `menu_images`
+8. `ocr`
+9. `finalize`
 
 Notes:
 - `extract` creates placeholder files by `entry_id`.
