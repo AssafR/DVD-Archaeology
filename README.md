@@ -53,4 +53,4 @@ The primary goal remains unchanged: **recovering episode structure from existing
 
 ---
 
-*Stream repair, when enabled, is intentionally conservative and never alters episode boundaries derived from DVD navigation data.*
+*FFmpeg may repair the video stream, but episode boundaries always come from the DVD menu — never from heuristics.*
