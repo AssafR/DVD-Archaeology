@@ -1,0 +1,7 @@
+[project]
+name = "dvd-archaeology"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.7.9"
+dependencies = []
