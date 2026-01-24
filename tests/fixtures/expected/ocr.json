@@ -1,0 +1,22 @@
+{
+  "results": [
+    {
+      "button_id": "btn1",
+      "raw_text": "Episode 1",
+      "cleaned_label": "Episode_1",
+      "confidence": 0.9
+    },
+    {
+      "button_id": "btn2",
+      "raw_text": "פרק 2",
+      "cleaned_label": "פרק_2",
+      "confidence": 0.9
+    },
+    {
+      "button_id": "btn3",
+      "raw_text": "Episode 3",
+      "cleaned_label": "Episode_3",
+      "confidence": 0.9
+    }
+  ]
+}

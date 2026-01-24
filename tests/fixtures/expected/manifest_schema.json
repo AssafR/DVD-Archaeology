@@ -1,0 +1,105 @@
+{
+  "extract": {
+    "outputs": {
+      "__list__": {
+        "button_id": "str",
+        "output_path": "str",
+        "status": "str"
+      }
+    }
+  },
+  "ingest": {
+    "created_at": "str",
+    "disc_type_guess": "str",
+    "has_video_ts": "bool",
+    "input_path": "str",
+    "video_ts_path": "str"
+  },
+  "inputs": {
+    "input_path": "str",
+    "out_dir": "str"
+  },
+  "menu_images": {
+    "images": {
+      "__list__": {
+        "button_id": "str",
+        "image_path": "str",
+        "menu_id": "str"
+      }
+    }
+  },
+  "menu_map": {
+    "menus": {
+      "__list__": {
+        "buttons": {
+          "__list__": {
+            "button_id": "str",
+            "rect": {
+              "h": "int",
+              "w": "int",
+              "x": "int",
+              "y": "int"
+            },
+            "target": {
+              "cell_id": "int",
+              "pgc_id": "int",
+              "title_id": "int"
+            }
+          }
+        },
+        "menu_id": "str"
+      }
+    }
+  },
+  "nav": {
+    "menu_domains": {
+      "__list__": "str"
+    },
+    "titles": {
+      "__list__": {
+        "pgcs": {
+          "__list__": {
+            "cells": {
+              "__list__": {
+                "cell_id": "int",
+                "end_time": "float",
+                "start_time": "float"
+              }
+            },
+            "pgc_id": "int"
+          }
+        },
+        "title_id": "int"
+      }
+    }
+  },
+  "ocr": {
+    "results": {
+      "__list__": {
+        "button_id": "str",
+        "cleaned_label": "str",
+        "confidence": "float",
+        "raw_text": "str"
+      }
+    }
+  },
+  "segments": {
+    "segments": {
+      "__list__": {
+        "button_id": "str",
+        "end_time": "float",
+        "start_time": "float"
+      }
+    }
+  },
+  "stage_status": {
+    "extract": "str",
+    "finalize": "str",
+    "ingest": "str",
+    "menu_images": "str",
+    "menu_map": "str",
+    "nav_parse": "str",
+    "ocr": "str",
+    "segments": "str"
+  }
+}

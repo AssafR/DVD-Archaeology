@@ -1,7 +1,21 @@
 [project]
 name = "dvd-archaeology"
 version = "0.1.0"
-description = "Add your description here"
+description = "DVD menu-aware episode extractor"
 readme = "README.md"
-requires-python = ">=3.7.9"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.6",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+dvdmenu-extract = "dvdmenu_extract.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4",
+]

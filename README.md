@@ -54,3 +54,17 @@ The primary goal remains unchanged: **recovering episode structure from existing
 ---
 
 *Stream repair, when enabled, is intentionally conservative and never alters episode boundaries derived from DVD navigation data.*
+
+---
+
+## Quick start (uv)
+
+```bash
+uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR>
+```
+
+Run a single stage (expects upstream artifacts in `--out`):
+
+```bash
+uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> --stage ocr
+```

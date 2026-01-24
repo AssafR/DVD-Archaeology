@@ -1,0 +1,7 @@
+{
+  "segments": [
+    {"button_id": "btn1", "start_time": 0.0, "end_time": 600.0},
+    {"button_id": "btn2", "start_time": 600.0, "end_time": 1200.0},
+    {"button_id": "btn3", "start_time": 1200.0, "end_time": 1800.0}
+  ]
+}
