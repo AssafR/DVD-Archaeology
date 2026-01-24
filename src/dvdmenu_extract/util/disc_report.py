@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dvdmenu_extract.models.enums import DiscFormat
 from dvdmenu_extract.models.ingest import DiscFileEntry, DiscReport, VideoTsReport
 from dvdmenu_extract.util.assertx import assert_dir_exists
 from dvdmenu_extract.util.video_ts import build_video_ts_report
+from dvdmenu_extract.util.video_tracks import list_video_tracks
 
 
 def build_disc_report(input_path: Path) -> DiscReport:
@@ -41,15 +43,20 @@ def build_disc_report(input_path: Path) -> DiscReport:
     video_ts_report: VideoTsReport | None = None
     mpeg2_count = None
     mpeg2_total = None
+    mpegav_count = None
+    mpegav_total = None
 
     svcd_dir = input_path / "SVCD"
     segment_dir = input_path / "SEGMENT"
     ext_dir = input_path / "EXT"
 
+    vcd_dir = input_path / "VCD"
+    mpegav_dir = input_path / "MPEGAV"
+
     if video_ts_dir.is_dir():
         video_ts_report = build_video_ts_report(video_ts_dir)
         add_files(video_ts_dir, ["*.IFO", "*.BUP", "*.VOB"])
-        disc_format = "DVD"
+        disc_format = DiscFormat.DVD
     elif (
         svcd_dir.is_dir()
         and (svcd_dir / "INFO.SVD").is_file()
@@ -65,10 +72,25 @@ def build_disc_report(input_path: Path) -> DiscReport:
             for entry in files
             if Path(entry.path).parent.name.upper() == "MPEG2"
         )
-        disc_format = "SVCD"
+        disc_format = DiscFormat.SVCD
+    elif (
+        vcd_dir.is_dir()
+        and (vcd_dir / "INFO.VCD").is_file()
+        and (vcd_dir / "ENTRIES.VCD").is_file()
+        and mpegav_dir.is_dir()
+    ):
+        add_files(vcd_dir, ["*.VCD", "*.DAT"])
+        mpegav_count = add_files(mpegav_dir, ["*.DAT", "*.dat"])
+        mpegav_total = sum(
+            entry.size_bytes
+            for entry in files
+            if Path(entry.path).parent.name.upper() == "MPEGAV"
+        )
+        disc_format = DiscFormat.VCD
     else:
-        disc_format = "UNKNOWN"
+        disc_format = DiscFormat.UNKNOWN
 
+    video_tracks = list_video_tracks(input_path, disc_format)
     return DiscReport(
         disc_format=disc_format,
         file_count=len(files),
@@ -78,4 +100,8 @@ def build_disc_report(input_path: Path) -> DiscReport:
         video_ts_report=video_ts_report,
         mpeg2_file_count=mpeg2_count,
         mpeg2_total_bytes=mpeg2_total,
+        mpegav_file_count=mpegav_count,
+        mpegav_total_bytes=mpegav_total,
+        video_track_count=len(video_tracks),
+        video_track_files=[str(path) for path in video_tracks],
     )

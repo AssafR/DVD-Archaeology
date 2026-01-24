@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.models.menu import MenuImagesModel, MenuMapModel
 from dvdmenu_extract.models.nav import NavigationModel
+from dvdmenu_extract.models.nav_summary import NavSummaryModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
 
@@ -36,6 +37,7 @@ class ManifestModel(BaseModel):
     inputs: dict[str, str]
     ingest: IngestModel
     nav: NavigationModel
+    nav_summary: NavSummaryModel
     menu_map: MenuMapModel
     menu_images: MenuImagesModel
     ocr: OcrModel

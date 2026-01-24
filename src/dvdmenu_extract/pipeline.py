@@ -29,16 +29,23 @@ STAGES = [
     "ingest",
     "nav_parse",
     "menu_map",
-    "menu_images",
-    "ocr",
     "segments",
     "extract",
+    "menu_images",
+    "ocr",
     "finalize",
 ]
 
 STAGE_OUTPUTS = {
     "ingest": ["ingest.json", "video_ts_report.json", "disc_report.json"],
-    "nav_parse": ["nav.json"],
+    "nav_parse": [
+        "nav.json",
+        "nav_summary.json",
+        "svcd_nav.json",
+        "vcd_nav.json",
+        "raw/vcd-info.stdout.txt",
+        "raw/vcd-info.stderr.txt",
+    ],
     "menu_map": ["menu_map.json"],
     "menu_images": ["menu_images.json"],
     "ocr": ["ocr.json"],
@@ -50,13 +57,14 @@ STAGE_OUTPUTS = {
 STAGE_INPUTS = {
     "nav_parse": ["ingest.json"],
     "menu_map": ["nav.json"],
+    "segments": ["menu_map.json", "nav.json"],
+    "extract": ["segments.json"],
     "menu_images": ["menu_map.json"],
     "ocr": ["menu_images.json"],
-    "segments": ["menu_map.json", "nav.json"],
-    "extract": ["segments.json", "ocr.json"],
     "finalize": [
         "ingest.json",
         "nav.json",
+        "nav_summary.json",
         "menu_map.json",
         "menu_images.json",
         "ocr.json",
@@ -125,6 +133,14 @@ def run_pipeline(
     manifest: ManifestModel | None = None
     for stage_name in selected:
         LOGGER.info("Stage start: %s", stage_name)
+        if stage_name != "ingest" and input_path is not None:
+            ingest_path = out_dir / "ingest.json"
+            if ingest_path.is_file():
+                ingest = read_json(ingest_path, IngestModel)
+                if Path(ingest.input_path).resolve() != input_path.resolve():
+                    raise ValidationError(
+                        "ingest.json input_path does not match current input_path"
+                    )
         _assert_required_inputs(out_dir, stage_name)
         outputs = [str(out_dir / name) for name in STAGE_OUTPUTS[stage_name]]
         inputs = [str(out_dir / name) for name in STAGE_INPUTS.get(stage_name, [])]
@@ -159,18 +175,6 @@ def run_pipeline(
             else:
                 menu_images_stage.run(out_dir / "menu_map.json", out_dir)
                 stage_status[stage_name] = "ok"
-        elif stage_name == "ocr":
-            if not options.force and (out_dir / "ocr.json").is_file():
-                read_json(out_dir / "ocr.json", OcrModel)
-                stage_status[stage_name] = "cached"
-            else:
-                ocr_stage.run(
-                    out_dir / "menu_images.json",
-                    out_dir,
-                    options.ocr_lang,
-                    options.use_real_ocr,
-                )
-                stage_status[stage_name] = "ok"
         elif stage_name == "segments":
             if not options.force and (out_dir / "segments.json").is_file():
                 read_json(out_dir / "segments.json", SegmentsModel)
@@ -187,10 +191,21 @@ def run_pipeline(
             else:
                 extract_stage.run(
                     out_dir / "segments.json",
-                    out_dir / "ocr.json",
                     out_dir,
                     options.use_real_ffmpeg,
                     options.repair,
+                )
+                stage_status[stage_name] = "ok"
+        elif stage_name == "ocr":
+            if not options.force and (out_dir / "ocr.json").is_file():
+                read_json(out_dir / "ocr.json", OcrModel)
+                stage_status[stage_name] = "cached"
+            else:
+                ocr_stage.run(
+                    out_dir / "menu_images.json",
+                    out_dir,
+                    options.ocr_lang,
+                    options.use_real_ocr,
                 )
                 stage_status[stage_name] = "ok"
         elif stage_name == "finalize":

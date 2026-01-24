@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+"""Stage G: extract.
+
+Generates episode files from segment boundaries. In stub mode, this creates
+empty placeholders named by entry_id to keep extraction independent of OCR.
+"""
+
 from pathlib import Path
 
 from dvdmenu_extract.models.manifest import ExtractEntryModel, ExtractModel
-from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
 from dvdmenu_extract.util.assertx import ValidationError, assert_in_out_dir
 from dvdmenu_extract.util.io import read_json, write_json
@@ -11,7 +16,6 @@ from dvdmenu_extract.util.io import read_json, write_json
 
 def run(
     segments_path: Path,
-    ocr_path: Path,
     out_dir: Path,
     use_real_ffmpeg: bool,
     repair: str,
@@ -22,8 +26,6 @@ def run(
         raise ValidationError("repair must be one of: off, safe")
 
     segments = read_json(segments_path, SegmentsModel)
-    ocr = read_json(ocr_path, OcrModel)
-    ocr_by_id = {entry.entry_id: entry for entry in ocr.results}
 
     episodes_dir = out_dir / "episodes"
     logs_dir = out_dir / "logs"
@@ -32,10 +34,7 @@ def run(
 
     outputs: list[ExtractEntryModel] = []
     for segment in segments.segments:
-        ocr_entry = ocr_by_id.get(segment.entry_id)
-        if not ocr_entry:
-            raise ValidationError("Missing OCR for entry_id in extract stage")
-        filename = f"{ocr_entry.cleaned_label}.mkv"
+        filename = f"{segment.entry_id}.mkv"
         output_path = episodes_dir / filename
         assert_in_out_dir(output_path, out_dir)
         output_path.write_bytes(b"")

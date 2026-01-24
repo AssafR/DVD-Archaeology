@@ -1,9 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-
 from dvdmenu_extract.stages.ingest import run as ingest_run
 
 
@@ -12,7 +11,7 @@ EXTERNAL_SVCD = Path(r"Q:\Old_Discs\0008 - SNL Steve Buscemi 1997 - CD")
 
 @pytest.mark.skipif(
     not EXTERNAL_SVCD.exists(),
-    reason="External SVCD sample not available on this machine",
+    reason="External SVCD sample not available",
 )
 def test_external_svcd_layout_and_ingest(tmp_path: Path) -> None:
     mpeg2_dir = EXTERNAL_SVCD / "MPEG2"
@@ -32,7 +31,7 @@ def test_external_svcd_layout_and_ingest(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(
     not EXTERNAL_SVCD.exists(),
-    reason="External SVCD sample not available on this machine",
+    reason="External SVCD sample not available",
 )
 def test_external_svcd_pipeline_stub(tmp_path: Path) -> None:
     from dvdmenu_extract.pipeline import PipelineOptions, run_pipeline

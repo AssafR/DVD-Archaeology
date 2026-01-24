@@ -72,3 +72,37 @@ Run a single stage (expects upstream artifacts in `--out`):
 ```bash
 uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> --stage ocr
 ```
+
+---
+
+## Pipeline stage order
+
+Current order:
+
+1. `ingest`
+2. `nav_parse`
+3. `menu_map`
+4. `segments`
+5. `extract`
+6. `menu_images`
+7. `ocr`
+8. `finalize`
+
+Notes:
+- `extract` creates placeholder files by `entry_id`.
+- `finalize` applies OCR labels to rename outputs when available.
+
+---
+
+## Stage A: ingest
+
+**Purpose:** validate the disc folder and capture a format-agnostic report for downstream stages.
+
+Artifacts written to `--out`:
+- `ingest.json` — input paths, disc type guess, timestamp, and embedded reports
+- `video_ts_report.json` — DVD-only file inventory and byte totals
+- `disc_report.json` — format-neutral inventory (directories, files, totals, format)
+
+Notes:
+- Fails fast if required `VIDEO_TS` files are missing when a DVD is detected.
+- For SVCD inputs, `disc_report` includes MPEG2 track counts and byte totals.

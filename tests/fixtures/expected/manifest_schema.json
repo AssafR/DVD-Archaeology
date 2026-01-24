@@ -42,7 +42,13 @@
       },
       "mpeg2_file_count": "null",
       "mpeg2_total_bytes": "null",
+      "mpegav_file_count": "null",
+      "mpegav_total_bytes": "null",
       "total_bytes": "int",
+      "video_track_count": "int",
+      "video_track_files": {
+        "__list__": "str"
+      },
       "video_ts_report": {
         "bup_total_bytes": "int",
         "file_count": "int",
@@ -135,7 +141,18 @@
         }
       }
     },
-    "svcd": "null"
+    "svcd": "null",
+    "vcd": "null"
+  },
+  "nav_summary": {
+    "cells": "int",
+    "control_files": "null",
+    "disc_format": "str",
+    "entry_points": "int",
+    "menu_domains": "int",
+    "pgcs": "int",
+    "titles": "int",
+    "tracks": "int"
   },
   "ocr": {
     "results": {

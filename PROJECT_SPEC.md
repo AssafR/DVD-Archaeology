@@ -40,6 +40,8 @@ Different formats may provide different capabilities:
   - button geometry
   - subpicture overlays
 
+  - On DVDs, only VTS_xx_1.VOB and higher contain program video; VIDEO_TS.VOB and VTS_xx_0.VOB are menu-only and must never be treated as episode content.
+
 The code MUST represent missing capabilities explicitly rather than assuming failure.
 
 ### Required abstraction
@@ -232,6 +234,27 @@ button.highlight_mask   ← ignore for OCR, useful for diagnostics
 menu.background_frame   ← pixel source (if SPU has no text)
 
 
+### DVD content vs menu verification (IFO-based, authoritative)
+
+DVD VOB filenames alone are insufficient to distinguish program content from menus.
+The authoritative distinction is defined by DVD navigation data in IFO files.
+
+Each DVD contains Program Chains (PGCs) of different types:
+- VMGM PGCs (Video Manager Menu PGCs), defined in VIDEO_TS.IFO, reference disc-level menu video.
+- VTSM PGCs (Video Title Set Menu PGCs), defined in VTS_xx_0.IFO, reference title/chapter menu video.
+- VTSTT PGCs (Video Title Set Title PGCs), defined in VTS_xx_0.IFO, reference actual program content.
+
+Each PGC consists of cells that map to specific VOB IDs, cell IDs, and sector/time ranges.
+Any video referenced by a VTSTT PGC must be treated as program content.
+Any video referenced exclusively by VMGM or VTSM PGCs must be treated as menu material.
+
+Implementation rules:
+- Parse IFO navigation structures to classify PGCs by type.
+- Only VTSTT PGCs may generate extractable titles/episodes.
+- Menu PGCs must never generate content outputs, even if they reference playable VOB segments.
+- Filename-based heuristics (e.g. ignoring *_0.VOB) are acceptable only as a fallback when IFO parsing is unavailable.
+
+This approach matches DVD specification semantics and avoids misclassifying menu video as content.
 
 
 ### Design rules
@@ -349,4 +372,54 @@ Design:
 - `dvdmenu_extract.util.process.run_process(...)`
 - Dataclasses in `dvdmenu_extract.models.svcd_nav`
 - Unit tests with fixtures that simulate stdout/stderr and validate parsing + error handling.
+
+
+
+## Optional format support: VCD 2.0 (White Book) — ARCHITECTURE READY
+
+We must support VCD directory layouts (MPEG-1) in addition to DVD and SVCD.
+
+### Detect VCD input
+Treat input as VCD if it contains:
+- /VCD/INFO.VCD and /VCD/ENTRIES.VCD (core metadata)
+- /MPEGAV/AVSEQ*.DAT (main tracks, MPEG-1 PS in .DAT container)
+Optionally:
+- /VCD/PSD.VCD and /VCD/LOT.VCD (PBC navigation)
+- /SEGMENT/ITEM*.DAT (segment play items for menu stills/pages/intros)
+- /EXT/PSD_X.VCD, /EXT/LOT_X.VCD, /EXT/SCANDATA.DAT (extensions/indexing)
+- /CDI/* (CD-i compatibility; ignore for extraction)
+
+### VCD navigation model (differences vs SVCD)
+- Main tracks are AVSEQnn.DAT under /MPEGAV (not /MPEG2/*.MPG).
+- Segments are ITEMnnnn.DAT under /SEGMENT.
+- VCD may use PBC via PSD/LOT/ENTRIES, but generally lacks DVD-like button rectangles/highlights.
+
+### Required abstraction behavior
+- Use the same format-neutral MenuEntry/Target abstraction used for SVCD:
+  - TrackTarget(track_no) or TimeRangeTarget(track_no, start/end) or SegmentItemTarget(item_no)
+  - selection_rect is typically None for VCD
+- Downstream stages must not assume DVD-only concepts.
+
+### Media handling requirement
+- Treat .DAT files as MPEG program streams; do not rely on filename extension.
+- Extraction uses FFmpeg; probes must succeed based on content, not extension.
+- OCR visuals:
+  - Prefer frames from SEGMENT/ITEM*.DAT for menu pages/stills when present.
+  - Fallback to representative frames from AVSEQ*.DAT near entry points if needed.
+
+### Tooling backend
+- Extend the VCDImager CLI backend to support BOTH VCD and SVCD:
+  - vcd-info is the primary structure probe (format, tracks, entries, PBC presence).
+  - Optionally vcdxrip XML for more structured parse later.
+- The backend must output a normalized, versioned JSON artifact consumed by the pipeline.
+
+
+On Windows, vcd-info cannot reliably analyze extracted VCD/SVCD directory trees because it operates at the disc/device abstraction level rather than the filesystem level.
+Therefore, the system treats vcd-info as an optional disc-image backend, not a required dependency.
+
+When only a directory tree is available, the default path is a lightweight native parser that reads VCD/SVCD control files directly and produces the same NavigationModel.
+
+Optionally, the system may construct a temporary disc image descriptor (e.g. CUE/BIN or ISO) from the directory and invoke vcd-info against that image as a best-effort enhancement; failure of this step must never block or invalidate the directory-native parsing path.
+
+This behavior reflects limitations of external tooling rather than properties of the underlying VCD/SVCD data.
 

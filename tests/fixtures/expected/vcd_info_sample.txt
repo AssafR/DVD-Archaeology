@@ -1,0 +1,6 @@
+VCD Information
+--------------
+Track 1: AVSEQ01.MPG
+Track 2: AVSEQ02.MPG
+Entry point: track 1 00:10:00
+Entry point: track 2 00:05:12

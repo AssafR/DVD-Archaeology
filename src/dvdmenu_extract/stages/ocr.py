@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Stage E: ocr.
+
+Performs dual-path OCR (SPU then background) on menu entry images. OCR is
+used only for labeling and should not affect segmentation.
+"""
+
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +24,9 @@ def _run_stub(menu_images: MenuImagesModel) -> OcrModel:
         if txt_path.is_file():
             raw_text = txt_path.read_text(encoding="utf-8-sig").strip()
         else:
-            if image.menu_id and image.menu_id.startswith("svcd"):
+            if image.menu_id and (
+                image.menu_id.startswith("svcd") or image.menu_id.startswith("vcd")
+            ):
                 raw_text = ""
             else:
                 raise ValidationError(f"Missing OCR fixture: {txt_path}")

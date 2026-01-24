@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+"""Stage H: finalize.
+
+Merges all stage outputs into a single manifest and applies OCR-based naming
+to extracted files when possible.
+"""
+
 from pathlib import Path
 
 from dvdmenu_extract.models.manifest import ExtractModel, ManifestModel
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.models.menu import MenuImagesModel, MenuMapModel
 from dvdmenu_extract.models.nav import NavigationModel
+from dvdmenu_extract.models.nav_summary import NavSummaryModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
 from dvdmenu_extract.util.assertx import ValidationError
@@ -15,6 +22,7 @@ from dvdmenu_extract.util.io import read_json, write_json
 def run(out_dir: Path, stage_status: dict[str, str]) -> ManifestModel:
     ingest = read_json(out_dir / "ingest.json", IngestModel)
     nav = read_json(out_dir / "nav.json", NavigationModel)
+    nav_summary = read_json(out_dir / "nav_summary.json", NavSummaryModel)
     menu_map = read_json(out_dir / "menu_map.json", MenuMapModel)
     menu_images = read_json(out_dir / "menu_images.json", MenuImagesModel)
     ocr = read_json(out_dir / "ocr.json", OcrModel)
@@ -33,10 +41,28 @@ def run(out_dir: Path, stage_status: dict[str, str]) -> ManifestModel:
     if menu_entry_ids != extract_ids:
         raise ValidationError("Mismatch between menu_map and extract entry ids")
 
+    ocr_by_id = {entry.entry_id: entry for entry in ocr.results}
+    for output in extract.outputs:
+        entry = ocr_by_id.get(output.entry_id)
+        if not entry:
+            continue
+        desired_name = f"{entry.cleaned_label}.mkv"
+        current_path = Path(output.output_path)
+        target_path = current_path.with_name(desired_name)
+        if current_path == target_path:
+            continue
+        if not current_path.is_file():
+            raise ValidationError(f"Missing extracted file: {current_path}")
+        if target_path.exists():
+            raise ValidationError(f"Target filename already exists: {target_path}")
+        current_path.rename(target_path)
+        output.output_path = str(target_path)
+
     manifest = ManifestModel(
         inputs={"input_path": ingest.input_path, "out_dir": str(out_dir)},
         ingest=ingest,
         nav=nav,
+        nav_summary=nav_summary,
         menu_map=menu_map,
         menu_images=menu_images,
         ocr=ocr,

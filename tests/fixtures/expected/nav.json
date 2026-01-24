@@ -18,5 +18,6 @@
     ],
     "menu_domains": ["VMGM"]
   },
-  "svcd": null
+  "svcd": null,
+  "vcd": null
 }

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dvdmenu_extract.models.enums import DiscFormat
+from dvdmenu_extract.models.svcd_nav import SvcdNavModel
+from dvdmenu_extract.models.vcd_nav import VcdNavModel
+
 
 class DvdCellModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -67,37 +71,22 @@ class DvdNavigationModel(BaseModel):
         return self
 
 
-class SvcdTrackModel(BaseModel):
+class SvcdNavigationModel(SvcdNavModel):
     model_config = ConfigDict(extra="forbid")
-
-    track_no: int
-    file_name: str
-
-    @model_validator(mode="after")
-    def _validate(self) -> "SvcdTrackModel":
-        if self.track_no <= 0:
-            raise ValueError("track_no must be positive")
-        return self
-
-
-class SvcdNavigationModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tracks: list[SvcdTrackModel]
-    entry_points: list[dict] = Field(default_factory=list)
 
 
 class NavigationModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    disc_format: str
+    disc_format: DiscFormat
     dvd: DvdNavigationModel | None = None
     svcd: SvcdNavigationModel | None = None
+    vcd: VcdNavModel | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "NavigationModel":
-        if self.disc_format not in {"DVD", "VCD", "SVCD", "UNKNOWN"}:
-            raise ValueError("disc_format must be DVD, VCD, SVCD, or UNKNOWN")
+        if self.disc_format not in DiscFormat:
+            raise ValueError("disc_format must be a valid DiscFormat")
         if self.disc_format == "DVD" and self.dvd is None:
             raise ValueError("dvd field required for disc_format=DVD")
         if self.disc_format != "DVD" and self.dvd is not None:
@@ -106,4 +95,8 @@ class NavigationModel(BaseModel):
             raise ValueError("svcd field required for disc_format=SVCD")
         if self.disc_format != "SVCD" and self.svcd is not None:
             raise ValueError("svcd field must be null when disc_format is not SVCD")
+        if self.disc_format == "VCD" and self.vcd is None:
+            raise ValueError("vcd field required for disc_format=VCD")
+        if self.disc_format != "VCD" and self.vcd is not None:
+            raise ValueError("vcd field must be null when disc_format is not VCD")
         return self

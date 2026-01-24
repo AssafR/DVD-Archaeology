@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+"""Stage A: ingest.
+
+Validates the input disc directory and writes format-neutral reports that
+summarize the detected layout and video assets. This stage sets the initial
+disc format guess and produces JSON artifacts for downstream stages.
+"""
+
 from pathlib import Path
 
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.util.assertx import assert_dir_exists
 from dvdmenu_extract.util.io import utc_now_iso, write_json
+from dvdmenu_extract.models.enums import DiscFormat
 from dvdmenu_extract.util.disc_report import build_disc_report
 from dvdmenu_extract.util.video_ts import build_video_ts_report
 
@@ -17,11 +25,13 @@ def run(input_path: Path, out_dir: Path) -> IngestModel:
     report = build_video_ts_report(video_ts_path) if has_video_ts else None
     disc_report = build_disc_report(input_path)
     if has_video_ts:
-        disc_type_guess = "DVD"
-    elif disc_report.disc_format == "SVCD":
-        disc_type_guess = "SVCD"
+        disc_type_guess = DiscFormat.DVD
+    elif disc_report.disc_format == DiscFormat.SVCD:
+        disc_type_guess = DiscFormat.SVCD
+    elif disc_report.disc_format == DiscFormat.VCD:
+        disc_type_guess = DiscFormat.VCD
     else:
-        disc_type_guess = "UNKNOWN"
+        disc_type_guess = DiscFormat.UNKNOWN
 
     model = IngestModel(
         input_path=str(input_path),

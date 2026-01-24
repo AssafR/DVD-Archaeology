@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Stage D: menu_images.
+
+Produces per-entry image crops used for OCR. For non-DVD formats, this stage
+generates placeholders when no fixture images are available.
+"""
+
 import shutil
 from pathlib import Path
 
