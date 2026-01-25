@@ -208,3 +208,4 @@ __marimo__/
 
 DVD_Sample_01/dvdmenu_extract_json/*  
 out/*
+out_schema_tmp/*
