@@ -12,16 +12,26 @@
                 "cell_id": 1,
                 "start_time": 0.0,
                 "end_time": 600.0
-              },
+              }
+            ]
+          },
+          {
+            "pgc_id": 2,
+            "cells": [
               {
                 "cell_id": 2,
-                "start_time": 600.0,
-                "end_time": 1200.0
-              },
+                "start_time": 0.0,
+                "end_time": 600.0
+              }
+            ]
+          },
+          {
+            "pgc_id": 3,
+            "cells": [
               {
                 "cell_id": 3,
-                "start_time": 1200.0,
-                "end_time": 1800.0
+                "start_time": 0.0,
+                "end_time": 600.0
               }
             ]
           }
@@ -30,6 +40,32 @@
     ],
     "menu_domains": [
       "VMGM"
+    ],
+    "menu_buttons": [
+      {
+        "button_id": "btn1",
+        "menu_id": "dvd_root",
+        "title_id": 1,
+        "pgc_id": 1,
+        "selection_rect": null,
+        "highlight_rect": null
+      },
+      {
+        "button_id": "btn2",
+        "menu_id": "dvd_root",
+        "title_id": 1,
+        "pgc_id": 2,
+        "selection_rect": null,
+        "highlight_rect": null
+      },
+      {
+        "button_id": "btn3",
+        "menu_id": "dvd_root",
+        "title_id": 1,
+        "pgc_id": 3,
+        "selection_rect": null,
+        "highlight_rect": null
+      }
     ]
   },
   "svcd": null,

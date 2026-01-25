@@ -34,15 +34,26 @@ class MenuTargetModel(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "MenuTargetModel":
-        if self.kind not in {"dvd_cell", "time_range", "track", "segment_item"}:
+        if self.kind not in {
+            "dvd_cell",
+            "dvd_pgc",
+            "time_range",
+            "track",
+            "segment_item",
+        }:
             raise ValueError(
-                "target kind must be dvd_cell, time_range, track, or segment_item"
+                "target kind must be dvd_cell, dvd_pgc, time_range, track, or segment_item"
             )
         if self.kind == "dvd_cell":
             if self.title_id is None or self.pgc_id is None or self.cell_id is None:
                 raise ValueError("dvd_cell requires title_id/pgc_id/cell_id")
             if min(self.title_id, self.pgc_id, self.cell_id) <= 0:
                 raise ValueError("dvd_cell ids must be positive")
+        if self.kind == "dvd_pgc":
+            if self.title_id is None or self.pgc_id is None:
+                raise ValueError("dvd_pgc requires title_id/pgc_id")
+            if min(self.title_id, self.pgc_id) <= 0:
+                raise ValueError("dvd_pgc ids must be positive")
         if self.kind == "time_range":
             if (
                 self.track_no is None
@@ -102,6 +113,9 @@ class MenuImageEntry(BaseModel):
     entry_id: str
     image_path: str
     menu_id: str | None = None
+    selection_rect: RectModel | None = None
+    highlight_rect: RectModel | None = None
+    target: MenuTargetModel | None = None
 
 
 class MenuImagesModel(BaseModel):

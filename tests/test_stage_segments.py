@@ -13,10 +13,16 @@ from tests.helpers import fixtures_dir, load_expected_json
 def test_stage_segments_stub(tmp_path: Path) -> None:
     input_path = fixtures_dir() / "disc_minimal"
     ingest_run(input_path, tmp_path)
-    nav_parse_run(tmp_path / "ingest.json", tmp_path)
+    nav_parse_run(tmp_path / "ingest.json", tmp_path, allow_dvd_ifo_fallback=True)
     menu_map_run(tmp_path / "nav.json", tmp_path)
 
-    timing_run(tmp_path / "nav.json", tmp_path)
+    timing_run(
+        tmp_path / "nav.json",
+        tmp_path / "ingest.json",
+        tmp_path / "menu_map.json",
+        tmp_path,
+        use_real_timing=False,
+    )
     segments = segments_run(
         tmp_path / "menu_map.json", tmp_path / "timing.json", tmp_path
     )

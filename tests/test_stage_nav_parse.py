@@ -12,7 +12,9 @@ from dvdmenu_extract.util.io import read_json
 def test_stage_nav_parse(tmp_path: Path) -> None:
     input_path = fixtures_dir() / "disc_minimal"
     ingest_run(input_path, tmp_path)
-    nav = nav_parse_run(tmp_path / "ingest.json", tmp_path)
+    nav = nav_parse_run(
+        tmp_path / "ingest.json", tmp_path, allow_dvd_ifo_fallback=True
+    )
 
     assert (tmp_path / "nav.json").is_file()
     assert nav.model_dump(mode="json") == load_expected_json("nav.json")

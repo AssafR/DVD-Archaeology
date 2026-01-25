@@ -20,31 +20,36 @@ def run(nav_path: Path, out_dir: Path) -> MenuMapModel:
     nav = read_json(nav_path, NavigationModel)
     entries = []
     if nav.disc_format == DiscFormat.DVD and nav.dvd is not None:
-        # For v0, derive one entry per cell; button geometry is unknown here.
-        for title in nav.dvd.titles:
-            for pgc in title.pgcs:
-                for cell in pgc.cells:
-                    entry_id = f"btn{cell.cell_id}"
-                    entries.append(
-                        {
-                            "entry_id": entry_id,
-                            "menu_id": "dvd_root",
-                            "rect": None,
-                            "selection_rect": None,
-                            "highlight_rect": None,
-                            "visuals": [],
-                            "target": {
-                                "kind": "dvd_cell",
-                                "title_id": title.title_id,
-                                "pgc_id": pgc.pgc_id,
-                                "cell_id": cell.cell_id,
-                                "track_no": None,
-                                "item_no": None,
-                                "start_time": None,
-                                "end_time": None,
-                            },
-                        }
-                    )
+        # Build entries directly from IFO-derived menu buttons.
+        pgc_index = {
+            (title.title_id, pgc.pgc_id)
+            for title in nav.dvd.titles
+            for pgc in title.pgcs
+        }
+        for button in nav.dvd.menu_buttons:
+            key = (button.title_id, button.pgc_id)
+            if key not in pgc_index:
+                raise ValidationError("menu button references missing PGC")
+            entries.append(
+                {
+                    "entry_id": button.button_id,
+                    "menu_id": button.menu_id,
+                    "rect": None,
+                    "selection_rect": button.selection_rect,
+                    "highlight_rect": button.highlight_rect,
+                    "visuals": [],
+                    "target": {
+                        "kind": "dvd_pgc",
+                        "title_id": button.title_id,
+                        "pgc_id": button.pgc_id,
+                        "cell_id": None,
+                        "track_no": None,
+                        "item_no": None,
+                        "start_time": None,
+                        "end_time": None,
+                    },
+                }
+            )
         model = MenuMapModel.model_validate({"entries": entries})
         write_json(out_dir / "menu_map.json", model)
         return model

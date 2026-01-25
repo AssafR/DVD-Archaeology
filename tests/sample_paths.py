@@ -10,6 +10,7 @@ from dvdmenu_extract.models.enums import DiscFormat
 class SampleSpec:
     path: Path
     expected_tracks: int | None = None
+    expected_nav_tracks: int | None = None
     count_globs: list[str] | None = None
 
 
@@ -20,6 +21,7 @@ SAMPLE_PATHS: dict[DiscFormat, list[SampleSpec]] = {
         SampleSpec(
             Path(r"Q:\DVDs\UglyBetty_s01b"),
             expected_tracks=4,
+            expected_nav_tracks=7,
             count_globs=[
                 "VIDEO_TS/VTS_01_[1-9].VOB",
                 "VIDEO_TS/VTS_01_[1-9].MKV",

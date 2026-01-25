@@ -373,6 +373,25 @@ Design:
 - Dataclasses in `dvdmenu_extract.models.svcd_nav`
 - Unit tests with fixtures that simulate stdout/stderr and validate parsing + error handling.
 
+### DVD menu button extraction limitations
+
+There is no maintained Python library capable of parsing DVD menus down to the level of highlighted buttons.
+DVD menu buttons are not stored as explicit geometric metadata; they are rendered at playback time by combining
+navigation data (IFO), subpicture bitmap streams (SPU), and player state.
+
+While C/C++ libraries such as libdvdread and libdvdnav expose menu navigation logic and button indices,
+they do not provide rendered button geometry or highlight masks in a form suitable for direct extraction.
+Full button rendering is implemented only inside DVD players.
+
+Therefore, the system must not attempt to read DVD button geometry directly.
+Menu understanding is performed indirectly by:
+- parsing IFO navigation structures to identify menu PGCs
+- extracting representative menu frames
+- applying OCR and visual analysis to infer labels and associations
+
+This approach reflects the actual structure of DVD technology and avoids reimplementing a DVD player.
+
+
 
 
 ## Optional format support: VCD 2.0 (White Book) — ARCHITECTURE READY
@@ -423,3 +442,5 @@ Optionally, the system may construct a temporary disc image descriptor (e.g. CUE
 
 This behavior reflects limitations of external tooling rather than properties of the underlying VCD/SVCD data.
 
+# Implementation tips:
+Do not create temporary artifacts in the log directory.

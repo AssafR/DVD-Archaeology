@@ -6,4 +6,6 @@ __all__ = [
     "video_tracks",
     "vcd_directory",
     "export",
+    "media",
+    "dvd_ifo",
 ]

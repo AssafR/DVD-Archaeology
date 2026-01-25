@@ -11,10 +11,12 @@ from pathlib import Path
 from dvdmenu_extract.models.manifest import ExtractModel, ManifestModel
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.models.menu import MenuImagesModel, MenuMapModel
+from dvdmenu_extract.models.menu_validation import MenuValidationModel
 from dvdmenu_extract.models.nav import NavigationModel
 from dvdmenu_extract.models.nav_summary import NavSummaryModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
+from dvdmenu_extract.models.verify import VerifyModel
 from dvdmenu_extract.util.assertx import ValidationError
 from dvdmenu_extract.util.io import read_json, write_json
 
@@ -24,10 +26,14 @@ def run(out_dir: Path, stage_status: dict[str, str]) -> ManifestModel:
     nav = read_json(out_dir / "nav.json", NavigationModel)
     nav_summary = read_json(out_dir / "nav_summary.json", NavSummaryModel)
     menu_map = read_json(out_dir / "menu_map.json", MenuMapModel)
+    menu_validation = read_json(
+        out_dir / "menu_validation.json", MenuValidationModel
+    )
     menu_images = read_json(out_dir / "menu_images.json", MenuImagesModel)
     ocr = read_json(out_dir / "ocr.json", OcrModel)
     segments = read_json(out_dir / "segments.json", SegmentsModel)
     extract = read_json(out_dir / "extract.json", ExtractModel)
+    verify = read_json(out_dir / "verify.json", VerifyModel)
 
     menu_entry_ids = {entry.entry_id for entry in menu_map.entries}
     ocr_ids = {entry.entry_id for entry in ocr.results}
@@ -64,10 +70,12 @@ def run(out_dir: Path, stage_status: dict[str, str]) -> ManifestModel:
         nav=nav,
         nav_summary=nav_summary,
         menu_map=menu_map,
+        menu_validation=menu_validation,
         menu_images=menu_images,
         ocr=ocr,
         segments=segments,
         extract=extract,
+        verify=verify,
         stage_status=stage_status,
     )
     write_json(out_dir / "manifest.json", manifest)

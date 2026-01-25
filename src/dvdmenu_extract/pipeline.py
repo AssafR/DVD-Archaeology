@@ -7,19 +7,23 @@ from pathlib import Path
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.models.manifest import ExtractModel, ManifestModel
 from dvdmenu_extract.models.menu import MenuImagesModel, MenuMapModel
+from dvdmenu_extract.models.menu_validation import MenuValidationModel
 from dvdmenu_extract.models.nav import NavigationModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
+from dvdmenu_extract.models.verify import VerifyModel
 from dvdmenu_extract.stages import (
     extract as extract_stage,
     finalize as finalize_stage,
     ingest as ingest_stage,
     menu_images as menu_images_stage,
     menu_map as menu_map_stage,
+    menu_validation as menu_validation_stage,
     nav_parse as nav_parse_stage,
     ocr as ocr_stage,
     segments as segments_stage,
     timing as timing_stage,
+    verify_extract as verify_extract_stage,
 )
 from dvdmenu_extract.util.assertx import ValidationError, assert_file_exists
 from dvdmenu_extract.util.export import export_json_artifacts
@@ -31,9 +35,11 @@ STAGES = [
     "ingest",
     "nav_parse",
     "menu_map",
+    "menu_validation",
     "timing",
     "segments",
     "extract",
+    "verify_extract",
     "menu_images",
     "ocr",
     "finalize",
@@ -50,20 +56,24 @@ STAGE_OUTPUTS = {
         "raw/vcd-info.stderr.txt",
     ],
     "menu_map": ["menu_map.json"],
-    "timing": ["timing.json"],
+    "menu_validation": ["menu_validation.json"],
+    "timing": ["timing.json", "timing_meta.json"],
     "menu_images": ["menu_images.json"],
     "ocr": ["ocr.json"],
     "segments": ["segments.json"],
     "extract": ["extract.json"],
+    "verify_extract": ["verify.json"],
     "finalize": ["manifest.json"],
 }
 
 STAGE_INPUTS = {
     "nav_parse": ["ingest.json"],
     "menu_map": ["nav.json"],
-    "timing": ["nav.json"],
+    "menu_validation": ["nav.json", "menu_map.json"],
+    "timing": ["nav.json", "ingest.json", "menu_map.json"],
     "segments": ["menu_map.json", "timing.json"],
-    "extract": ["segments.json"],
+    "extract": ["segments.json", "ingest.json", "menu_map.json", "nav.json"],
+    "verify_extract": ["segments.json", "extract.json"],
     "menu_images": ["menu_map.json"],
     "ocr": ["menu_images.json"],
     "finalize": [
@@ -71,11 +81,13 @@ STAGE_INPUTS = {
         "nav.json",
         "nav_summary.json",
         "menu_map.json",
+        "menu_validation.json",
         "menu_images.json",
         "ocr.json",
         "timing.json",
         "segments.json",
         "extract.json",
+        "verify.json",
     ],
 }
 
@@ -90,6 +102,8 @@ class PipelineOptions:
         force: bool,
         json_out_root: bool,
         json_root_dir: bool,
+        use_real_timing: bool,
+        allow_dvd_ifo_fallback: bool,
     ) -> None:
         self.ocr_lang = ocr_lang
         self.use_real_ocr = use_real_ocr
@@ -98,6 +112,8 @@ class PipelineOptions:
         self.force = force
         self.json_out_root = json_out_root
         self.json_root_dir = json_root_dir
+        self.use_real_timing = use_real_timing
+        self.allow_dvd_ifo_fallback = allow_dvd_ifo_fallback
 
 
 def _stage_root(out_dir: Path, input_path: Path, options: PipelineOptions) -> Path:
@@ -187,7 +203,11 @@ def run_pipeline(
                 read_json(stage_root / "nav.json", NavigationModel)
                 stage_status[stage_name] = "cached"
             else:
-                nav_parse_stage.run(stage_root / "ingest.json", stage_root)
+                nav_parse_stage.run(
+                    stage_root / "ingest.json",
+                    stage_root,
+                    allow_dvd_ifo_fallback=options.allow_dvd_ifo_fallback,
+                )
                 stage_status[stage_name] = "ok"
         elif stage_name == "menu_map":
             if not options.force and (stage_root / "menu_map.json").is_file():
@@ -195,6 +215,17 @@ def run_pipeline(
                 stage_status[stage_name] = "cached"
             else:
                 menu_map_stage.run(stage_root / "nav.json", stage_root)
+                stage_status[stage_name] = "ok"
+        elif stage_name == "menu_validation":
+            if not options.force and (stage_root / "menu_validation.json").is_file():
+                read_json(stage_root / "menu_validation.json", MenuValidationModel)
+                stage_status[stage_name] = "cached"
+            else:
+                menu_validation_stage.run(
+                    stage_root / "nav.json",
+                    stage_root / "menu_map.json",
+                    stage_root,
+                )
                 stage_status[stage_name] = "ok"
         elif stage_name == "menu_images":
             if not options.force and (stage_root / "menu_images.json").is_file():
@@ -219,7 +250,13 @@ def run_pipeline(
                 read_json(stage_root / "timing.json", SegmentsModel)
                 stage_status[stage_name] = "cached"
             else:
-                timing_stage.run(stage_root / "nav.json", stage_root)
+                timing_stage.run(
+                    stage_root / "nav.json",
+                    stage_root / "ingest.json",
+                    stage_root / "menu_map.json",
+                    stage_root,
+                    options.use_real_timing,
+                )
                 stage_status[stage_name] = "ok"
         elif stage_name == "extract":
             if not options.force and (stage_root / "extract.json").is_file():
@@ -228,9 +265,22 @@ def run_pipeline(
             else:
                 extract_stage.run(
                     stage_root / "segments.json",
+                    stage_root / "ingest.json",
+                    stage_root / "menu_map.json",
                     stage_root,
                     options.use_real_ffmpeg,
                     options.repair,
+                )
+                stage_status[stage_name] = "ok"
+        elif stage_name == "verify_extract":
+            if not options.force and (stage_root / "verify.json").is_file():
+                read_json(stage_root / "verify.json", VerifyModel)
+                stage_status[stage_name] = "cached"
+            else:
+                verify_extract_stage.run(
+                    stage_root / "segments.json",
+                    stage_root / "extract.json",
+                    stage_root,
                 )
                 stage_status[stage_name] = "ok"
         elif stage_name == "ocr":

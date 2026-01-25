@@ -17,6 +17,8 @@ def test_pipeline_stub_e2e(tmp_path: Path) -> None:
         force=True,
         json_out_root=False,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     run_pipeline(input_path=input_path, out_dir=tmp_path, options=options)
 

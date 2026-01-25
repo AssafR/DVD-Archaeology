@@ -3,7 +3,7 @@
   "video_ts_path": "C:\\Users\\Assaf\\program\\DVD-Archaeology\\tests\\fixtures\\disc_minimal\\VIDEO_TS",
   "disc_type_guess": "DVD",
   "has_video_ts": true,
-  "created_at": "2026-01-24T19:52:41.801759+00:00",
+  "created_at": "2026-01-24T23:13:39.071921+00:00",
   "video_ts_report": {
     "file_count": 12,
     "total_bytes": 60,

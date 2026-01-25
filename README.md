@@ -14,7 +14,7 @@ Instead of guessing timestamps or relying on broken chapter metadata, this tool 
 Most DVD ripping tools flatten discs into one or two large video files, silently discarding the navigation logic that defines where episodes actually begin and end.  
 For home-authored DVDs, VCDs, and SVCDs, this often means losing episode boundaries and titles entirely.
 
-This project takes the opposite approach: **it reads the DVD the way a player does**, preserving the author’s intent and reconstructing episode structure instead of guessing it.
+This project takes tche opposite approach: **it reads the DVD the way a player does**, preserving the author’s intent and reconstructing episode structure instead of guessing it.
 
 ---
 

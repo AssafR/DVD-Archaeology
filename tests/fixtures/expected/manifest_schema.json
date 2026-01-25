@@ -73,8 +73,20 @@
     "images": {
       "__list__": {
         "entry_id": "str",
+        "highlight_rect": "null",
         "image_path": "str",
-        "menu_id": "str"
+        "menu_id": "str",
+        "selection_rect": "null",
+        "target": {
+          "cell_id": "null",
+          "end_time": "null",
+          "item_no": "null",
+          "kind": "str",
+          "pgc_id": "int",
+          "start_time": "null",
+          "title_id": "int",
+          "track_no": "null"
+        }
       }
     }
   },
@@ -87,7 +99,7 @@
         "rect": "null",
         "selection_rect": "null",
         "target": {
-          "cell_id": "int",
+          "cell_id": "null",
           "end_time": "null",
           "item_no": "null",
           "kind": "str",
@@ -102,9 +114,47 @@
       }
     }
   },
+  "menu_validation": {
+    "disc_format": "str",
+    "issues": {
+      "__list__": "empty"
+    },
+    "menu_counts": {
+      "__list__": {
+        "menu_id": "str",
+        "menu_entry_count": "int",
+        "nav_button_count": "int"
+      }
+    },
+    "menu_entry_count": "int",
+    "missing_in_menu_map": {
+      "__list__": "empty"
+    },
+    "missing_in_nav_buttons": {
+      "__list__": "empty"
+    },
+    "nav_button_count": "int",
+    "ok": "bool",
+    "target_kind_counts": {
+      "__list__": {
+        "count": "int",
+        "kind": "str"
+      }
+    }
+  },
   "nav": {
     "disc_format": "str",
     "dvd": {
+      "menu_buttons": {
+        "__list__": {
+          "button_id": "str",
+          "highlight_rect": "null",
+          "menu_id": "str",
+          "pgc_id": "int",
+          "selection_rect": "null",
+          "title_id": "int"
+        }
+      },
       "menu_domains": {
         "__list__": "str"
       },
@@ -161,15 +211,25 @@
       }
     }
   },
+  "verify": {
+    "ok": "bool",
+    "results": {
+      "__list__": "empty"
+    },
+    "skipped": "bool",
+    "tolerance_sec": "float"
+  },
   "stage_status": {
     "extract": "str",
     "finalize": "str",
     "ingest": "str",
     "menu_images": "str",
     "menu_map": "str",
+    "menu_validation": "str",
     "nav_parse": "str",
     "ocr": "str",
+    "segments": "str",
     "timing": "str",
-    "segments": "str"
+    "verify_extract": "str"
   }
 }

@@ -23,6 +23,8 @@ def test_missing_upstream_artifact_raises(tmp_path: Path) -> None:
         force=False,
         json_out_root=False,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     with pytest.raises(ValidationError):
         run_pipeline(input_path=tmp_path, out_dir=tmp_path, options=options, stage="menu_map")
@@ -39,6 +41,8 @@ def test_ingest_input_mismatch_raises(tmp_path: Path) -> None:
         force=False,
         json_out_root=False,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     with pytest.raises(ValidationError):
         run_pipeline(
@@ -58,6 +62,8 @@ def test_stage_and_until_conflict(tmp_path: Path) -> None:
         force=False,
         json_out_root=False,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     with pytest.raises(ValidationError):
         run_pipeline(
@@ -78,6 +84,8 @@ def test_until_does_not_require_finalize(tmp_path: Path) -> None:
         force=True,
         json_out_root=False,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     run_pipeline(
         input_path=tmp_path,

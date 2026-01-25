@@ -4,10 +4,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dvdmenu_extract.models.ingest import IngestModel
 from dvdmenu_extract.models.menu import MenuImagesModel, MenuMapModel
+from dvdmenu_extract.models.menu_validation import MenuValidationModel
 from dvdmenu_extract.models.nav import NavigationModel
 from dvdmenu_extract.models.nav_summary import NavSummaryModel
 from dvdmenu_extract.models.ocr import OcrModel
 from dvdmenu_extract.models.segments import SegmentsModel
+from dvdmenu_extract.models.verify import VerifyModel
 
 
 class ExtractEntryModel(BaseModel):
@@ -39,10 +41,12 @@ class ManifestModel(BaseModel):
     nav: NavigationModel
     nav_summary: NavSummaryModel
     menu_map: MenuMapModel
+    menu_validation: MenuValidationModel
     menu_images: MenuImagesModel
     ocr: OcrModel
     segments: SegmentsModel
     extract: ExtractModel
+    verify: VerifyModel
     stage_status: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")

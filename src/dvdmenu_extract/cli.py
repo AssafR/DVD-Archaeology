@@ -28,6 +28,8 @@ def main(
     list_stages: bool = typer.Option(False, "--list-stages"),
     json_out_root: bool = typer.Option(False, "--json-out-root"),
     json_root_dir: bool = typer.Option(False, "--json-root-dir"),
+    use_real_timing: bool = typer.Option(False, "--use-real-timing"),
+    allow_dvd_ifo_fallback: bool = typer.Option(False, "--allow-dvd-ifo-fallback"),
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if list_stages:
@@ -49,6 +51,8 @@ def main(
         force=force,
         json_out_root=json_out_root,
         json_root_dir=json_root_dir,
+        use_real_timing=use_real_timing,
+        allow_dvd_ifo_fallback=allow_dvd_ifo_fallback,
     )
     try:
         run_pipeline(

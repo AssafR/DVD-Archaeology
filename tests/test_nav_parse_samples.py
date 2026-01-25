@@ -15,7 +15,7 @@ from tests.sample_paths import SAMPLE_PATHS, SampleSpec
 
 def _run_nav_parse(tmp_path: Path, spec: SampleSpec) -> tuple[NavigationModel, NavSummaryModel]:
     ingest_run(spec.path, tmp_path)
-    nav_parse_run(tmp_path / "ingest.json", tmp_path)
+    nav_parse_run(tmp_path / "ingest.json", tmp_path, allow_dvd_ifo_fallback=True)
     nav = read_json(tmp_path / "nav.json", NavigationModel)
     summary = read_json(tmp_path / "nav_summary.json", NavSummaryModel)
     return nav, summary
@@ -35,8 +35,13 @@ def test_nav_parse_samples(tmp_path: Path, disc_format: DiscFormat) -> None:
         assert nav.disc_format == disc_format
         assert summary.disc_format == disc_format
 
-        if spec.expected_tracks is not None:
-            assert summary.tracks == spec.expected_tracks
+        expected_tracks = (
+            spec.expected_nav_tracks
+            if spec.expected_nav_tracks is not None
+            else spec.expected_tracks
+        )
+        if expected_tracks is not None:
+            assert summary.tracks == expected_tracks
 
         if disc_format == DiscFormat.DVD:
             assert nav.dvd is not None

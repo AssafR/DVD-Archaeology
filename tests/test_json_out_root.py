@@ -16,6 +16,8 @@ def test_json_out_root_exports(tmp_path: Path) -> None:
         force=True,
         json_out_root=True,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     run_pipeline(input_path=input_path, out_dir=tmp_path, options=options, stage="ingest")
 
@@ -33,6 +35,8 @@ def test_json_root_dir_reads_from_disc_root(tmp_path: Path) -> None:
         force=True,
         json_out_root=False,
         json_root_dir=True,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     run_pipeline(input_path=input_path, out_dir=tmp_path, options=options, stage="ingest")
     run_pipeline(input_path=input_path, out_dir=tmp_path, options=options, stage="nav_parse")

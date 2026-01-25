@@ -59,6 +59,8 @@ def test_dvd_sample_pipeline_stub(tmp_path: Path) -> None:
         force=True,
         json_out_root=False,
         json_root_dir=False,
+        use_real_timing=False,
+        allow_dvd_ifo_fallback=True,
     )
     run_pipeline(input_path=sample_path, out_dir=tmp_path, options=options)
 

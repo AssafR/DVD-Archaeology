@@ -40,6 +40,9 @@ def run(menu_map_path: Path, out_dir: Path) -> MenuImagesModel:
                 entry_id=entry.entry_id,
                 image_path=str(dst),
                 menu_id=entry.menu_id,
+                selection_rect=entry.selection_rect,
+                highlight_rect=entry.highlight_rect,
+                target=entry.target,
             )
         )
 
