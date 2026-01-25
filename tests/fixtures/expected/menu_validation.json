@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "disc_format": "DVD",
+  "menu_entry_count": 3,
+  "nav_button_count": 3,
+  "menu_counts": [
+    {"menu_id": "dvd_root", "menu_entry_count": 3, "nav_button_count": 3}
+  ],
+  "target_kind_counts": [
+    {"kind": "dvd_pgc", "count": 3}
+  ],
+  "missing_in_menu_map": [],
+  "missing_in_nav_buttons": [],
+  "issues": []
+}

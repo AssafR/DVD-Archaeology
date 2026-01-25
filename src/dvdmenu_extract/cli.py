@@ -30,6 +30,9 @@ def main(
     json_root_dir: bool = typer.Option(False, "--json-root-dir"),
     use_real_timing: bool = typer.Option(False, "--use-real-timing"),
     allow_dvd_ifo_fallback: bool = typer.Option(False, "--allow-dvd-ifo-fallback"),
+    ocr_reference_path: Optional[Path] = typer.Option(
+        None, "--ocr-reference", dir_okay=False
+    ),
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if list_stages:
@@ -53,6 +56,9 @@ def main(
         json_root_dir=json_root_dir,
         use_real_timing=use_real_timing,
         allow_dvd_ifo_fallback=allow_dvd_ifo_fallback,
+        ocr_reference_path=str(ocr_reference_path)
+        if ocr_reference_path is not None
+        else None,
     )
     try:
         run_pipeline(

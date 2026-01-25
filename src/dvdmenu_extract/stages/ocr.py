@@ -17,22 +17,60 @@ from dvdmenu_extract.util.io import read_json, write_json
 from dvdmenu_extract.util.paths import sanitize_filename
 
 
-def _run_stub(menu_images: MenuImagesModel) -> OcrModel:
+def _load_reference_lines(
+    out_dir: Path, reference_path: Optional[Path]
+) -> list[str] | None:
+    resolved = reference_path or (out_dir / "ocr_reference.txt")
+    if not resolved.is_file():
+        return None
+    lines = [
+        line.strip()
+        for line in resolved.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip()
+    ]
+    return lines or None
+
+
+def _run_stub(
+    menu_images: MenuImagesModel, out_dir: Path, reference_path: Optional[Path]
+) -> OcrModel:
     entries: list[OcrEntryModel] = []
+    reference_lines = _load_reference_lines(out_dir, reference_path)
+    fixture_available = any(
+        (menu_buttons_dir() / f"{image.entry_id}.txt").is_file()
+        for image in menu_images.images
+    )
+    use_reference = False
+    if reference_lines and not fixture_available:
+        if len(reference_lines) != len(menu_images.images):
+            raise ValidationError(
+                "OCR reference line count must match menu entry count"
+            )
+        use_reference = True
+    reference_iter = iter(reference_lines) if use_reference else None
     for image in menu_images.images:
         txt_path = menu_buttons_dir() / f"{image.entry_id}.txt"
+        reference_used = False
         if txt_path.is_file():
             raw_text = txt_path.read_text(encoding="utf-8-sig").strip()
+        elif reference_iter is not None:
+            raw_text = next(reference_iter)
+            reference_used = True
         else:
             if image.menu_id and (
                 image.menu_id.startswith("svcd") or image.menu_id.startswith("vcd")
             ):
                 raw_text = ""
             else:
-                raise ValidationError(f"Missing OCR fixture: {txt_path}")
-        spu_text_nonempty = raw_text != ""
-        background_attempted = not spu_text_nonempty
-        source = "spu" if spu_text_nonempty else "background"
+                raw_text = ""
+        if reference_used:
+            spu_text_nonempty = False
+            background_attempted = True
+            source = "background"
+        else:
+            spu_text_nonempty = raw_text != ""
+            background_attempted = not spu_text_nonempty
+            source = "spu" if spu_text_nonempty else "background"
         cleaned = (
             sanitize_filename(raw_text)
             if raw_text
@@ -96,8 +134,13 @@ def run(
     out_dir: Path,
     ocr_lang: str,
     use_real_ocr: bool,
+    ocr_reference_path: Optional[Path] = None,
 ) -> OcrModel:
     menu_images = read_json(menu_images_path, MenuImagesModel)
-    model = _run_real(menu_images, ocr_lang) if use_real_ocr else _run_stub(menu_images)
+    model = (
+        _run_real(menu_images, ocr_lang)
+        if use_real_ocr
+        else _run_stub(menu_images, out_dir, ocr_reference_path)
+    )
     write_json(out_dir / "ocr.json", model)
     return model

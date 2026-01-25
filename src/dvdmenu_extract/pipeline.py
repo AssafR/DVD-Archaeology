@@ -104,6 +104,7 @@ class PipelineOptions:
         json_root_dir: bool,
         use_real_timing: bool,
         allow_dvd_ifo_fallback: bool,
+        ocr_reference_path: str | None = None,
     ) -> None:
         self.ocr_lang = ocr_lang
         self.use_real_ocr = use_real_ocr
@@ -114,6 +115,7 @@ class PipelineOptions:
         self.json_root_dir = json_root_dir
         self.use_real_timing = use_real_timing
         self.allow_dvd_ifo_fallback = allow_dvd_ifo_fallback
+        self.ocr_reference_path = ocr_reference_path
 
 
 def _stage_root(out_dir: Path, input_path: Path, options: PipelineOptions) -> Path:
@@ -293,6 +295,9 @@ def run_pipeline(
                     stage_root,
                     options.ocr_lang,
                     options.use_real_ocr,
+                    Path(options.ocr_reference_path)
+                    if options.ocr_reference_path
+                    else None,
                 )
                 stage_status[stage_name] = "ok"
         elif stage_name == "finalize":

@@ -1,0 +1,9 @@
+uv run pytest tests/test_external_reference_compare.py -k reference --reference-verbose --reference-skip-extract -s
+uv run dvdmenu-extract "Q:\DVDs\UglyBetty_s01b" --out Q:\DVDs\UglyBetty_s01b\chapters  --until extract --use-real-ffmpeg --force  
+
+uv run dvdmenu-extract "Q:\DVDs\UglyBetty_s01b" --out Q:\DVDs\UglyBetty_s01b\chapters --use-real-ffmpeg --force  
+
+uv run dvdmenu-extract Q:\DVDs\UglyBetty_s01b --out out --ocr-reference tests/UglyBettyText
+
+uv run pytest tests/test_external_sample_uglybetty.py -k ocr_reference
+
