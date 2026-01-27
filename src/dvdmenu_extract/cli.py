@@ -8,6 +8,7 @@ import typer
 
 from dvdmenu_extract.pipeline import PipelineOptions, STAGES, run_pipeline
 from dvdmenu_extract.util.assertx import ValidationError
+from dvdmenu_extract.util.logging import IndentFilter
 
 app = typer.Typer(add_completion=False)
 
@@ -19,12 +20,15 @@ def main(
     ),
     out: Optional[Path] = typer.Option(None, "--out", dir_okay=True, file_okay=False),
     ocr_lang: str = typer.Option("eng+heb", "--ocr-lang"),
-    use_real_ocr: bool = typer.Option(False, "--use-real-ocr"),
+    use_stub_ocr: bool = typer.Option(False, "--use-stub-ocr"),
     use_real_ffmpeg: bool = typer.Option(False, "--use-real-ffmpeg"),
     repair: str = typer.Option("off", "--repair"),
     stage: Optional[str] = typer.Option(None, "--stage"),
     until: Optional[str] = typer.Option(None, "--until"),
+    from_stage: Optional[str] = typer.Option(None, "--from"),
     force: bool = typer.Option(False, "--force"),
+    overwrite_outputs: bool = typer.Option(False, "--overwrite-outputs"),
+    use_reference_images: bool = typer.Option(False, "--use-reference-images"),
     list_stages: bool = typer.Option(False, "--list-stages"),
     json_out_root: bool = typer.Option(False, "--json-out-root"),
     json_root_dir: bool = typer.Option(False, "--json-root-dir"),
@@ -35,6 +39,12 @@ def main(
     ),
 ) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        handler.addFilter(IndentFilter())
+        handler.setFormatter(
+            logging.Formatter("%(levelname)s %(indent)s%(message)s")
+        )
     if list_stages:
         typer.echo("\n".join(STAGES))
         raise typer.Exit(code=0)
@@ -45,10 +55,16 @@ def main(
     if stage and until:
         typer.echo("Error: use --stage or --until, not both")
         raise typer.Exit(code=2)
+    if stage and from_stage:
+        typer.echo("Error: use --stage or --from, not both")
+        raise typer.Exit(code=2)
+    if until and from_stage:
+        typer.echo("Error: use --until or --from, not both")
+        raise typer.Exit(code=2)
 
     options = PipelineOptions(
         ocr_lang=ocr_lang,
-        use_real_ocr=use_real_ocr,
+        use_real_ocr=not use_stub_ocr,
         use_real_ffmpeg=use_real_ffmpeg,
         repair=repair,
         force=force,
@@ -56,6 +72,8 @@ def main(
         json_root_dir=json_root_dir,
         use_real_timing=use_real_timing,
         allow_dvd_ifo_fallback=allow_dvd_ifo_fallback,
+        use_reference_images=use_reference_images,
+        overwrite_outputs=overwrite_outputs,
         ocr_reference_path=str(ocr_reference_path)
         if ocr_reference_path is not None
         else None,
@@ -67,6 +85,7 @@ def main(
             options=options,
             stage=stage,
             until=until,
+            from_stage=from_stage,
         )
     except ValidationError as exc:
         typer.echo(f"Error: {exc}", err=True)

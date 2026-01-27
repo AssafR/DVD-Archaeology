@@ -21,7 +21,11 @@ from dvdmenu_extract.util.assertx import ValidationError
 from dvdmenu_extract.util.io import read_json, write_json
 
 
-def run(out_dir: Path, stage_status: dict[str, str]) -> ManifestModel:
+def run(
+    out_dir: Path,
+    stage_status: dict[str, str],
+    overwrite_outputs: bool = False,
+) -> ManifestModel:
     ingest = read_json(out_dir / "ingest.json", IngestModel)
     nav = read_json(out_dir / "nav.json", NavigationModel)
     nav_summary = read_json(out_dir / "nav_summary.json", NavSummaryModel)
@@ -60,7 +64,14 @@ def run(out_dir: Path, stage_status: dict[str, str]) -> ManifestModel:
         if not current_path.is_file():
             raise ValidationError(f"Missing extracted file: {current_path}")
         if target_path.exists():
-            raise ValidationError(f"Target filename already exists: {target_path}")
+            if overwrite_outputs:
+                if target_path.is_dir():
+                    raise ValidationError(
+                        f"Target path is a directory: {target_path}"
+                    )
+                target_path.unlink()
+            else:
+                raise ValidationError(f"Target filename already exists: {target_path}")
         current_path.rename(target_path)
         output.output_path = str(target_path)
 

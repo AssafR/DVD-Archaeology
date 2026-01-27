@@ -8,6 +8,7 @@ used only for labeling and should not affect segmentation.
 
 from pathlib import Path
 from typing import Optional
+import logging
 
 from dvdmenu_extract.models.menu import MenuImagesModel
 from dvdmenu_extract.models.ocr import OcrEntryModel, OcrModel
@@ -36,12 +37,8 @@ def _run_stub(
 ) -> OcrModel:
     entries: list[OcrEntryModel] = []
     reference_lines = _load_reference_lines(out_dir, reference_path)
-    fixture_available = any(
-        (menu_buttons_dir() / f"{image.entry_id}.txt").is_file()
-        for image in menu_images.images
-    )
     use_reference = False
-    if reference_lines and not fixture_available:
+    if reference_lines:
         if len(reference_lines) != len(menu_images.images):
             raise ValidationError(
                 "OCR reference line count must match menu entry count"
@@ -49,6 +46,7 @@ def _run_stub(
         use_reference = True
     reference_iter = iter(reference_lines) if use_reference else None
     for image in menu_images.images:
+        logging.info("performing OCR on %s.png", image.entry_id)
         txt_path = menu_buttons_dir() / f"{image.entry_id}.txt"
         reference_used = False
         if txt_path.is_file():
@@ -71,6 +69,7 @@ def _run_stub(
             spu_text_nonempty = raw_text != ""
             background_attempted = not spu_text_nonempty
             source = "spu" if spu_text_nonempty else "background"
+        logging.info("OCR Result: %s", raw_text)
         cleaned = (
             sanitize_filename(raw_text)
             if raw_text
@@ -101,12 +100,44 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
 
     entries: list[OcrEntryModel] = []
     for image in menu_images.images:
+        logging.info("performing OCR on %s", image.image_path)
         image_path = Path(image.image_path)
         if not image_path.is_file():
             raise ValidationError(f"Missing menu image for OCR: {image_path}")
+        
+        import pytesseract
+        from PIL import Image
+        
+        # Ensure tesseract is in path or explicitly set
+        # For this environment, we know it's at C:\Program Files\Tesseract-OCR\tesseract.exe
+        tesseract_exe = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if Path(tesseract_exe).is_file():
+            pytesseract.pytesseract.tesseract_cmd = tesseract_exe
+
+        # Load image and perform OCR
+        img = Image.open(image_path)
+        
+        # Basic preprocessing: convert to grayscale for better OCR
+        img = img.convert('L')
+        
+        # Tesseract config: 
+        # --psm 7: Treat the image as a single text line.
+        # --psm 6: Assume a single uniform block of text.
+        # We'll try 7 first as these are usually button labels.
+        config = "--psm 7"
+        
         raw_text = pytesseract.image_to_string(
-            Image.open(image_path), lang=ocr_lang
+            img, lang=ocr_lang, config=config
         ).strip()
+        
+        # If empty with psm 7, try psm 6
+        if not raw_text:
+            config = "--psm 6"
+            raw_text = pytesseract.image_to_string(
+                img, lang=ocr_lang, config=config
+            ).strip()
+        logging.info("OCR Result: %s", raw_text)
+
         spu_text_nonempty = False
         background_attempted = True
         source = "background"
@@ -137,10 +168,12 @@ def run(
     ocr_reference_path: Optional[Path] = None,
 ) -> OcrModel:
     menu_images = read_json(menu_images_path, MenuImagesModel)
+    logging.info("Starting OCR stage")
     model = (
         _run_real(menu_images, ocr_lang)
         if use_real_ocr
         else _run_stub(menu_images, out_dir, ocr_reference_path)
     )
     write_json(out_dir / "ocr.json", model)
+    logging.info("Finished OCR stage")
     return model

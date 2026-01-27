@@ -8,6 +8,7 @@ empty placeholders named by entry_id to keep extraction independent of OCR.
 
 from dataclasses import dataclass
 import subprocess
+import logging
 from pathlib import Path
 
 from dvdmenu_extract.models.ingest import IngestModel
@@ -359,7 +360,7 @@ def run(
 
         log_path = logs_dir / f"{segment.entry_id}.log"
         assert_in_out_dir(log_path, out_dir)
-        print(f"  Starting {segment.entry_id}")
+        logging.info("Starting %s", segment.entry_id)
         if use_real_ffmpeg:
             source = source_by_entry.get(segment.entry_id)
             if source is None:
@@ -424,7 +425,7 @@ def run(
                         f"ffmpeg extraction failed for {segment.entry_id}; see {log_path}"
                     )
                 size = output_path.stat().st_size
-                print(f"  Created file {output_path} of size {size}")
+                logging.info("Created file %s of size %s", output_path, size)
                 log_path.write_text("\n".join(log_messages), encoding="utf-8")
                 outputs.append(
                     ExtractEntryModel(
@@ -594,7 +595,7 @@ def run(
             )
             status = "stub"
         size = output_path.stat().st_size
-        print(f"  Created file {output_path} of size {size}")
+        logging.info("Created file %s of size %s", output_path, size)
         outputs.append(
             ExtractEntryModel(
                 entry_id=segment.entry_id,

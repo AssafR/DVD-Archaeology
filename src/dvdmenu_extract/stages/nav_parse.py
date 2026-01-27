@@ -19,7 +19,7 @@ from dvdmenu_extract.util.fixtures import expected_dir
 from dvdmenu_extract.util.io import read_json, write_json
 import logging
 
-from dvdmenu_extract.util.dvd_ifo import parse_dvd_ifo_titles
+from dvdmenu_extract.util.dvd_ifo import parse_dvd_ifo_titles, parse_dvd_nav_menu_buttons
 from dvdmenu_extract.util.vcd_directory import parse_svcd_directory, parse_vcd_directory
 
 
@@ -30,21 +30,70 @@ def _build_dvd_nav(
     video_ts = input_path / "VIDEO_TS"
     titles, parse_error = parse_dvd_ifo_titles(video_ts)
     if titles:
-        buttons = []
-        button_index = 1
-        for title in titles:
-            for pgc in title.pgcs:
-                buttons.append(
-                    {
-                        "button_id": f"btn{button_index}",
-                        "menu_id": "dvd_root",
-                        "title_id": title.title_id,
-                        "pgc_id": pgc.pgc_id,
-                        "selection_rect": None,
-                        "highlight_rect": None,
-                    }
-                )
-                button_index += 1
+        # Try to parse real menu buttons if possible
+        menu_buttons = parse_dvd_nav_menu_buttons(video_ts)
+        if menu_buttons:
+            logger = logging.getLogger(__name__)
+            # Prefer VTSM menu buttons with valid rects; cap to title PGC counts.
+            filtered: list[dict] = []
+            button_index = 1
+            for title in titles:
+                expected_count = len(title.pgcs)
+                if expected_count == 0:
+                    continue
+                candidates = [
+                    btn
+                    for btn in menu_buttons
+                    if btn.get("title_id") == title.title_id
+                    and str(btn.get("menu_id", "")).upper().startswith("VTSM")
+                    and btn.get("selection_rect") is not None
+                ]
+                if not candidates:
+                    continue
+                def _area(btn: dict) -> int:
+                    rect = btn.get("selection_rect") or {}
+                    return int(rect.get("w", 0)) * int(rect.get("h", 0))
+                candidates.sort(key=_area, reverse=True)
+                trimmed = candidates[:expected_count]
+                if len(candidates) > expected_count:
+                    logger.info(
+                        "nav_parse: trimming menu buttons from %d to %d for title %d",
+                        len(candidates),
+                        expected_count,
+                        title.title_id,
+                    )
+                # Assign pgc_ids by top-to-bottom, left-to-right order.
+                pgc_ids = sorted(pgc.pgc_id for pgc in title.pgcs)
+                def _pos_key(btn: dict) -> tuple[int, int]:
+                    rect = btn.get("selection_rect") or {}
+                    return (int(rect.get("y", 0)), int(rect.get("x", 0)))
+                trimmed.sort(key=_pos_key)
+                for btn, pgc_id in zip(trimmed, pgc_ids, strict=False):
+                    btn["pgc_id"] = pgc_id
+                for btn in trimmed:
+                    btn["button_id"] = f"btn{button_index}"
+                    button_index += 1
+                filtered.extend(trimmed)
+            if filtered:
+                menu_buttons = filtered
+
+        if not menu_buttons:
+            # Fallback to synthetic buttons if none found in IFO
+            button_index = 1
+            for title in titles:
+                for pgc in title.pgcs:
+                    menu_buttons.append(
+                        {
+                            "button_id": f"btn{button_index}",
+                            "menu_id": "dvd_root",
+                            "title_id": title.title_id,
+                            "pgc_id": pgc.pgc_id,
+                            "selection_rect": None,
+                            "highlight_rect": None,
+                        }
+                    )
+                    button_index += 1
+        
         return (
             {
             "disc_format": "DVD",
@@ -72,10 +121,8 @@ def _build_dvd_nav(
                     }
                     for title in titles
                 ],
-                    "menu_domains": ["VMGM"]
-                    if (video_ts / "VIDEO_TS.IFO").is_file()
-                    else [],
-                    "menu_buttons": buttons,
+                    "menu_domains": list(set(btn["menu_id"] for btn in menu_buttons)) if menu_buttons else ["VMGM"],
+                    "menu_buttons": menu_buttons,
             },
             "svcd": None,
             "vcd": None,

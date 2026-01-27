@@ -67,63 +67,81 @@ The code MUST represent missing capabilities explicitly rather than assuming fai
 
 
 
-## Tech constraints / assumptions (v0)
-- Python 3.11+
-- CLI entrypoint (Typer or argparse)
-- pytest for tests
-- No external web calls
-- Disc input is a folder path (e.g., VIDEO_TS). We will not implement ISO mounting in v0.
-- OCR engine targeted: Tesseract (invoked via pytesseract), with languages "eng+heb" (must be optional and gracefully handled if missing).
+## Tech constraints / assumptions
+- Python 3.12+
+- `pyparsedvd` for robust DVD IFO parsing.
+- `ffmpeg` and `ffprobe` for media extraction and timing.
+- `pytesseract` (optional) for OCR.
+- `pydantic` for schema validation.
+- Cross-platform support (Windows/Linux/macOS).
+- No external DB; all state in JSON files.
 
 ## Pipeline architecture (MUST IMPLEMENT)
 Pipeline stages should be explicit and individually runnable:
 
 Stage A: ingest
 - Input: path to disc folder
-- Output: out/ingest.json (disc type guess, paths, basic sanity checks)
+- Output: `ingest.json`, `video_ts_report.json`, `disc_report.json`
+- Purpose: Disc type detection, path discovery, and basic sanity checks.
 
-Stage B: nav_parse (stub first)
-- Input: ingest.json
-- Output: out/nav.json (titles/vts/pgc/cell structure + menu domains)
-- v0 stub: return synthetic structure from fixtures.
+Stage B: nav_parse
+- Input: `ingest.json`
+- Output: `nav.json`, `nav_summary.json`, `svcd_nav.json`, `vcd_nav.json`, `raw/vcd-info.stdout.txt`, `raw/vcd-info.stderr.txt` (if using vcd-info)
+- Purpose: Parse navigation structure (titles, VTS, PGC, cells) and menu domains.
 
-Stage C: menu_map (stub first)
-- Input: nav.json
-- Output: out/menu_map.json (menu_id -> list of buttons with rect + target PGC/cell)
-- v0 stub: return synthetic menu/button mapping from fixtures.
+Stage C: menu_map
+- Input: `nav.json`
+- Output: `menu_map.json`
+- Purpose: Map menu IDs to buttons with their coordinates and targets.
 
-Stage D: menu_images (stub first)
-- Input: menu_map.json
-- Output: out/menu_images/{button_id}.png + out/menu_images.json (paths + metadata)
-- v0 stub: copy fixture PNGs.
+Stage D: menu_validation
+- Input: `nav.json`, `menu_map.json`
+- Output: `menu_validation.json`
+- Purpose: Validate the consistency of the menu mapping against the navigation data.
 
-Stage E: ocr (stub first, real OCR optional)
-- Input: menu_images.json
-- Output: out/ocr.json (button_id -> raw_text + cleaned_label + confidence)
-- v0 stub: read fixture text files; real OCR behind a flag.
+Stage E: timing
+- Input: `nav.json`, `ingest.json`, `menu_map.json`
+- Output: `timing.json`, `timing_meta.json`
+- Purpose: Determine precise start/end timestamps for segments.
 
 Stage F: segments
-- Input: nav.json + menu_map.json
-- Output: out/segments.json (button_id -> start/end timestamps OR cell list)
-- v0: compute from fixtures; real later.
+- Input: `menu_map.json`, `timing.json`
+- Output: `segments.json`
+- Purpose: Define the final segments to be extracted based on menu buttons and timing.
 
 Stage G: extract
-- Input: segments.json + ocr.json
-- Output: episodes/*.mkv + out/extract.json + logs/*.log
-- v0 stub: create empty placeholder files named correctly.
-- Later: real FFmpeg extraction/remux with optional --repair.
+- Input: `segments.json`, `ingest.json`, `menu_map.json`, `nav.json`
+- Output: `episodes/*.mkv`, `extract.json`, `logs/*.log`
+- Purpose: Extract and remux video segments using FFmpeg.
 
-Stage H: finalize
+Stage H: verify_extract
+- Input: `segments.json`, `extract.json`
+- Output: `verify.json`
+- Purpose: Verify the integrity and correctness of the extracted files.
+
+Stage I: menu_images
+- Input: `menu_map.json`
+- Output: `menu_images.json`, `menu_images/{button_id}.png`
+- Purpose: Extract button images from menu domains. When `--use-real-ffmpeg` is enabled, crop from VOB menu frames; optional `Reference/` overrides are used only when `--use-reference-images` is set. Otherwise, use fixtures/placeholders for tests.
+
+Stage J: ocr
+- Input: `menu_images.json`
+- Output: `ocr.json`
+- Purpose: Perform OCR on menu images to extract button labels. Real OCR is the default; use `--use-stub-ocr` for stub mode (which can read reference text files).
+
+Stage K: finalize
 - Input: all previous outputs
-- Output: out/manifest.json (single merged manifest; stable schema)
-- Must include: inputs, detected disc info, each button label, segment boundaries, output filename, and stage statuses.
+- Output: `manifest.json`
+- Purpose: Merge all artifacts into a single stable manifest. Includes inputs, detected disc info, button labels, segment boundaries, output filenames, and stage statuses.
 
 ## CLI requirements
 Implement a CLI command:
-dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> [--ocr-lang eng+heb] [--use-real-ocr] [--use-real-ffmpeg] [--repair off|safe] [--stage <stage_name>] [--force]
+dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> [--ocr-lang eng+heb] [--use-stub-ocr] [--use-real-ffmpeg] [--repair off|safe] [--stage <stage_name>] [--until <stage_name>] [--from <stage_name>] [--force]
 
 - Default runs full pipeline.
 - --stage runs only one stage (and asserts required upstream artifacts exist).
+- --until runs all stages from ingest through the given stage.
+- --from runs the given stage and all downstream stages.
 - Must have clear error messages and non-zero exit codes.
 - Must never silently succeed if a required artifact is missing or malformed.
 
@@ -154,18 +172,23 @@ Fixtures:
 - tests/fixtures/menu_buttons/ (PNG images)
 - tests/fixtures/expected/*.json
 
-## Repo layout (please create)
+## Repo layout (please create if doesn't exist):
 src/dvdmenu_extract/
   __init__.py
   cli.py
   pipeline.py
   stages/
+    extract.py
     ingest.py
     nav_parse.py
     menu_map.py
     menu_images.py
+    menu_validation.py
+    nav_parse.py
     ocr.py
     segments.py
+    timing.py
+    verify_extract.py
     extract.py
     finalize.py
   models/
@@ -174,6 +197,11 @@ src/dvdmenu_extract/
     menu.py
     ocr.py
     segments.py
+    nav_summary.py
+    segments.py
+    svcd_nav.py
+    vcd_nav.py
+    verify.py
     manifest.py
   util/
     io.py
@@ -187,7 +215,7 @@ tests/
   fixtures/...
 
 ## Implementation notes
-- Start by implementing the full stub pipeline with deterministic fixtures so it runs in <2 seconds in CI.
+- All stages (A-K) are implemented and functional.
 - Keep real integrations (libdvdnav bindings, SPU extraction, FFmpeg extraction, real OCR) behind feature flags, with stubs as the default.
 - Log every stage start/end and write stage metadata (duration, inputs, outputs).
 - Use type hints everywhere; enable mypy later (optional).
@@ -313,6 +341,19 @@ Create a format-neutral NavigationModel:
 - Downstream stages (OCR, segments, extract, manifest) MUST only use MenuEntry/Target abstractions,
   never DVD-specific PGC/VTS terms.
 
+### SVCD navigation model (high-level)
+- "Episodes" are typically represented as:
+  - Tracks: MPEG2/AVSEQnn.MPG
+  - Entry points into tracks: ENTRIES.SVD (mm:ss:ff addresses)
+  - PBC lists and selection logic: PSD.SVD + LOT.SVD (selection lists/play lists/end lists)
+- Unlike DVD, SVCD may NOT provide button rectangles/highlight masks.
+  Therefore, our core pipeline must operate on an abstract NavigationModel and MenuEntry model.
+
+### SVCD implementation plan
+1. **Primary**: Native directory parsing of `EXT`, `SEGMENT`, and `VCD` folders to build the navigation tree.
+2. **Secondary (Optional)**: Use `vcd-info` (from `vcdimager`) to extract detailed entry point and track metadata if available.
+3. **Extraction**: Use `ffmpeg` to extract tracks from `.MPG` files in the `MPEG2` or `SEGMENT` directories.
+
 ### SVCD implementation plan (v1: pragmatic; v2: native)
 v1 (fast, reliable): Use external GNU VCDImager tools via subprocess:
 - Prefer `vcd-info` to parse SVCD PBC/entries/tracks and output a machine-readable summary
@@ -320,7 +361,7 @@ v1 (fast, reliable): Use external GNU VCDImager tools via subprocess:
 - Optionally use `vcdxrip` for extraction support (if helpful), but FFmpeg remains the extractor.
 
 v2 (native): Replace subprocess parsing with direct parsing of SVCD binaries:
-- ENTRIES.SVD: entry points pe
+- ENTRIES.SVD: entry points parsing.
 
 ### SVCD support on Windows (implementation strategy)
 
@@ -413,6 +454,11 @@ Optionally:
 - Segments are ITEMnnnn.DAT under /SEGMENT.
 - VCD may use PBC via PSD/LOT/ENTRIES, but generally lacks DVD-like button rectangles/highlights.
 
+### VCD implementation strategy
+1. **Primary**: Native directory parsing of `VCD` and `SEGMENT` folders.
+2. **Secondary (Optional)**: Use `vcd-info` for detailed metadata.
+3. **Extraction**: Use `ffmpeg` to extract tracks from `.DAT` files in the `MPEGAV` directory.
+
 ### Required abstraction behavior
 - Use the same format-neutral MenuEntry/Target abstraction used for SVCD:
   - TrackTarget(track_no) or TimeRangeTarget(track_no, start/end) or SegmentItemTarget(item_no)
@@ -444,3 +490,7 @@ This behavior reflects limitations of external tooling rather than properties of
 
 # Implementation tips:
 Do not create temporary artifacts in the log directory.
+
+The project configuration is handled by uv. Do not use pip for install, only "uv add", and to run anything, use "uv run".
+
+

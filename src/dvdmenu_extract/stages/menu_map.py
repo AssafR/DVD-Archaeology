@@ -7,6 +7,7 @@ track metadata; for DVD, fixtures provide deterministic button mappings.
 """
 
 from pathlib import Path
+import logging
 
 from dvdmenu_extract.models.menu import MenuMapModel
 from dvdmenu_extract.models.nav import NavigationModel
@@ -21,15 +22,31 @@ def run(nav_path: Path, out_dir: Path) -> MenuMapModel:
     entries = []
     if nav.disc_format == DiscFormat.DVD and nav.dvd is not None:
         # Build entries directly from IFO-derived menu buttons.
+        logger = logging.getLogger(__name__)
         pgc_index = {
             (title.title_id, pgc.pgc_id)
             for title in nav.dvd.titles
             for pgc in title.pgcs
         }
+        first_pgc_by_title = {
+            title.title_id: min(pgc.pgc_id for pgc in title.pgcs)
+            for title in nav.dvd.titles
+            if title.pgcs
+        }
         for button in nav.dvd.menu_buttons:
             key = (button.title_id, button.pgc_id)
             if key not in pgc_index:
-                raise ValidationError("menu button references missing PGC")
+                fallback_pgc = first_pgc_by_title.get(button.title_id)
+                if fallback_pgc is None:
+                    raise ValidationError("menu button references missing PGC")
+                logger.info(
+                    "menu_map: remapping button %s to pgc_id %s",
+                    button.button_id,
+                    fallback_pgc,
+                )
+                pgc_id = fallback_pgc
+            else:
+                pgc_id = button.pgc_id
             entries.append(
                 {
                     "entry_id": button.button_id,
@@ -41,7 +58,7 @@ def run(nav_path: Path, out_dir: Path) -> MenuMapModel:
                     "target": {
                         "kind": "dvd_pgc",
                         "title_id": button.title_id,
-                        "pgc_id": button.pgc_id,
+                        "pgc_id": pgc_id,
                         "cell_id": None,
                         "track_no": None,
                         "item_no": None,
