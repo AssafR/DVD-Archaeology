@@ -45,7 +45,13 @@ def _run_stub(
             )
         use_reference = True
     reference_iter = iter(reference_lines) if use_reference else None
-    for image in menu_images.images:
+    def _entry_sort_key(entry_id: str) -> int:
+        digits = "".join(ch for ch in entry_id if ch.isdigit())
+        return int(digits) if digits else 0
+    ordered_images = sorted(
+        menu_images.images, key=lambda img: _entry_sort_key(img.entry_id)
+    )
+    for image in ordered_images:
         logging.info("performing OCR on %s.png", image.entry_id)
         txt_path = menu_buttons_dir() / f"{image.entry_id}.txt"
         reference_used = False
@@ -92,14 +98,20 @@ def _run_stub(
 def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
     try:
         import pytesseract
-        from PIL import Image
+        from PIL import Image, ImageOps
     except Exception as exc:  # pragma: no cover - depends on external env
         raise ValidationError(
             "Real OCR requested but pytesseract/Pillow not available"
         ) from exc
 
     entries: list[OcrEntryModel] = []
-    for image in menu_images.images:
+    def _entry_sort_key(entry_id: str) -> int:
+        digits = "".join(ch for ch in entry_id if ch.isdigit())
+        return int(digits) if digits else 0
+    ordered_images = sorted(
+        menu_images.images, key=lambda img: _entry_sort_key(img.entry_id)
+    )
+    for image in ordered_images:
         logging.info("performing OCR on %s", image.image_path)
         image_path = Path(image.image_path)
         if not image_path.is_file():
@@ -117,14 +129,16 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         # Load image and perform OCR
         img = Image.open(image_path)
         
-        # Basic preprocessing: convert to grayscale for better OCR
-        img = img.convert('L')
+        # Basic preprocessing: grayscale + contrast + binarize
+        img = ImageOps.autocontrast(img.convert("L"))
+        img = img.point(lambda p: 255 if p > 140 else 0)
         
-        # Tesseract config: 
+        # Tesseract config:
         # --psm 7: Treat the image as a single text line.
         # --psm 6: Assume a single uniform block of text.
-        # We'll try 7 first as these are usually button labels.
-        config = "--psm 7"
+        # Restrict to digits/dot to reduce confusions.
+        whitelist = "-c tessedit_char_whitelist=0123456789.aA"
+        config = f"--psm 7 {whitelist}"
         
         raw_text = pytesseract.image_to_string(
             img, lang=ocr_lang, config=config
@@ -132,7 +146,7 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         
         # If empty with psm 7, try psm 6
         if not raw_text:
-            config = "--psm 6"
+            config = f"--psm 6 {whitelist}"
             raw_text = pytesseract.image_to_string(
                 img, lang=ocr_lang, config=config
             ).strip()

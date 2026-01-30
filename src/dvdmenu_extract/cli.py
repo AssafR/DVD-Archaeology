@@ -29,11 +29,13 @@ def main(
     force: bool = typer.Option(False, "--force"),
     overwrite_outputs: bool = typer.Option(False, "--overwrite-outputs"),
     use_reference_images: bool = typer.Option(False, "--use-reference-images"),
+    use_reference_guidance: bool = typer.Option(False, "--use-reference-guide"),
     list_stages: bool = typer.Option(False, "--list-stages"),
     json_out_root: bool = typer.Option(False, "--json-out-root"),
     json_root_dir: bool = typer.Option(False, "--json-root-dir"),
     use_real_timing: bool = typer.Option(False, "--use-real-timing"),
     allow_dvd_ifo_fallback: bool = typer.Option(False, "--allow-dvd-ifo-fallback"),
+    debug_spu: bool = typer.Option(False, "--debug-spu"),
     ocr_reference_path: Optional[Path] = typer.Option(
         None, "--ocr-reference", dir_okay=False
     ),
@@ -72,7 +74,9 @@ def main(
         json_root_dir=json_root_dir,
         use_real_timing=use_real_timing,
         allow_dvd_ifo_fallback=allow_dvd_ifo_fallback,
+        debug_spu=debug_spu,
         use_reference_images=use_reference_images,
+        use_reference_guidance=use_reference_guidance,
         overwrite_outputs=overwrite_outputs,
         ocr_reference_path=str(ocr_reference_path)
         if ocr_reference_path is not None

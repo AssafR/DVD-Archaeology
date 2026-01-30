@@ -91,6 +91,12 @@ Run from a stage onward (inclusive):
 uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> --from menu_map
 ```
 
+Extract menu buttons + OCR without video extraction:
+
+```bash
+uv run dvdmenu-extract <INPUT_PATH> --out <OUT_DIR> --use-real-ffmpeg --until ocr
+```
+
 ---
 
 ## Pipeline stage order
@@ -103,15 +109,29 @@ Current order:
 4. `menu_validation`
 5. `timing`
 6. `segments`
-7. `extract`
-8. `verify_extract`
-9. `menu_images`
-10. `ocr`
+7. `menu_images`
+8. `ocr`
+9. `extract`
+10. `verify_extract`
 11. `finalize`
 
 Notes:
-- `extract` creates placeholder files by `entry_id`.
+- `menu_images` and `ocr` run before `extract` so you can validate labels early.
 - `finalize` applies OCR labels to rename outputs when available.
+
+## Button ordering heuristic (DVD)
+Some discs have menu navigation that is column-first, others are row-first. To
+avoid hardcoding a single order, the nav parser:
+- Builds two candidate orders per menu: row-major and column-major.
+- Builds an expected order from per-button playback targets:
+  - resolve each button's target PGC
+  - use that PGC's first cell (vob_id + first_sector) as the playback position
+- Chooses the order with the lower mismatch score.
+- Prioritizes the spatial navigation direction (shorter path length).
+- Falls back to playback-target ordering only when distances are close.
+
+This heuristic is logged as:
+`nav_parse: ordering heuristic for title X menu Y: row_score=... col_score=... row_dist=... col_dist=...`.
 
 ---
 

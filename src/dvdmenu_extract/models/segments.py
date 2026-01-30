@@ -9,6 +9,7 @@ class SegmentEntryModel(BaseModel):
     entry_id: str
     start_time: float = Field(..., ge=0.0)
     end_time: float = Field(..., ge=0.0)
+    playback_order: int | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> "SegmentEntryModel":

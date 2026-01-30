@@ -7,6 +7,8 @@ to extracted files when possible.
 """
 
 from pathlib import Path
+import logging
+import shutil
 
 from dvdmenu_extract.models.manifest import ExtractModel, ManifestModel
 from dvdmenu_extract.models.ingest import IngestModel
@@ -52,11 +54,18 @@ def run(
         raise ValidationError("Mismatch between menu_map and extract entry ids")
 
     ocr_by_id = {entry.entry_id: entry for entry in ocr.results}
+    ordered_segments = sorted(
+        segments.segments, key=lambda seg: (seg.playback_order or 0, seg.entry_id)
+    )
+    index_by_id = {seg.entry_id: idx + 1 for idx, seg in enumerate(ordered_segments)}
+    logger = logging.getLogger(__name__)
     for output in extract.outputs:
         entry = ocr_by_id.get(output.entry_id)
         if not entry:
             continue
-        desired_name = f"{entry.cleaned_label}.mkv"
+        index = index_by_id.get(output.entry_id)
+        prefix = f"{index:02d}_" if index is not None else ""
+        desired_name = f"{prefix}{entry.cleaned_label}.mkv"
         current_path = Path(output.output_path)
         target_path = current_path.with_name(desired_name)
         if current_path == target_path:
@@ -72,8 +81,24 @@ def run(
                 target_path.unlink()
             else:
                 raise ValidationError(f"Target filename already exists: {target_path}")
-        current_path.rename(target_path)
+        logger.info("copying %s to %s", current_path.name, target_path.name)
+        shutil.copy2(current_path, target_path)
         output.output_path = str(target_path)
+
+    # Sync report: playback order -> output file -> OCR label
+    extract_by_id = {entry.entry_id: entry for entry in extract.outputs}
+    for seg in ordered_segments:
+        ocr_entry = ocr_by_id.get(seg.entry_id)
+        extract_entry = extract_by_id.get(seg.entry_id)
+        if not ocr_entry or not extract_entry:
+            continue
+        label = ocr_entry.cleaned_label or ocr_entry.raw_text
+        logger.info(
+            "sync: %s -> %s -> %s",
+            seg.entry_id,
+            Path(extract_entry.output_path).name,
+            label,
+        )
 
     manifest = ManifestModel(
         inputs={"input_path": ingest.input_path, "out_dir": str(out_dir)},

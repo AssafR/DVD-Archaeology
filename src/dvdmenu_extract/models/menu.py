@@ -92,6 +92,7 @@ class MenuEntryModel(BaseModel):
     target: MenuTargetModel
     menu_id: str | None = None
     visuals: list[VisualRegionModel] = Field(default_factory=list)
+    playback_order: int | None = None
 
 
 class MenuMapModel(BaseModel):
@@ -116,6 +117,7 @@ class MenuImageEntry(BaseModel):
     selection_rect: RectModel | None = None
     highlight_rect: RectModel | None = None
     target: MenuTargetModel | None = None
+    playback_order: int | None = None
 
 
 class MenuImagesModel(BaseModel):

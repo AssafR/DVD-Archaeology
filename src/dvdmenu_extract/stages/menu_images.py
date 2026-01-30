@@ -8,14 +8,76 @@ generates placeholders when no fixture images are available.
 
 import shutil
 import subprocess
+import logging
 from pathlib import Path
 from typing import Optional, Tuple
 
-from dvdmenu_extract.models.menu import MenuImagesModel, MenuImageEntry, MenuMapModel, RectModel
+from PIL import Image, ImageChops, ImageStat
+import pytesseract
+
+from dvdmenu_extract.models.menu import (
+    MenuImagesModel,
+    MenuImageEntry,
+    MenuEntryModel,
+    MenuMapModel,
+    RectModel,
+)
 from dvdmenu_extract.util.assertx import ValidationError, assert_in_out_dir
 from dvdmenu_extract.util.fixtures import menu_buttons_dir
 from dvdmenu_extract.util.io import read_json, write_json
+from dvdmenu_extract.models.nav import NavigationModel
 import base64
+
+
+def _rect_area(rect: RectModel) -> int:
+    return max(0, rect.w) * max(0, rect.h)
+
+
+def _rect_intersection_area(a: RectModel, b: RectModel) -> int:
+    left = max(a.x, b.x)
+    top = max(a.y, b.y)
+    right = min(a.x + a.w, b.x + b.w)
+    bottom = min(a.y + a.h, b.y + b.h)
+    if right <= left or bottom <= top:
+        return 0
+    return (right - left) * (bottom - top)
+
+
+def _overlap_ratio(a: RectModel, b: RectModel) -> float:
+    inter = _rect_intersection_area(a, b)
+    if inter == 0:
+        return 0.0
+    min_area = min(_rect_area(a), _rect_area(b))
+    if min_area == 0:
+        return 0.0
+    return inter / min_area
+
+
+def _rects_overlap_too_much(
+    rects: list[tuple[str, RectModel]],
+    max_overlap_ratio: float,
+) -> bool:
+    for idx, (_, rect) in enumerate(rects):
+        for _, other_rect in rects[idx + 1 :]:
+            if _overlap_ratio(rect, other_rect) > max_overlap_ratio:
+                return True
+    return False
+
+
+def _assert_rects_have_low_overlap(
+    menus: dict[str, list[tuple[str, RectModel]]],
+    max_overlap_ratio: float = 0.2,
+) -> None:
+    for menu_id, menu_entries in menus.items():
+        for idx, (entry_id, rect) in enumerate(menu_entries):
+            for other_id, other_rect in menu_entries[idx + 1 :]:
+                ratio = _overlap_ratio(rect, other_rect)
+                if ratio > max_overlap_ratio:
+                    raise ValidationError(
+                        "menu_images: overlapping button rects detected "
+                        f"menu_id={menu_id} {entry_id} vs {other_id} "
+                        f"overlap_ratio={ratio:.2f} (max {max_overlap_ratio:.2f})"
+                    )
 
 
 def _extract_frame(vob_path: Path, output_png: Path) -> None:
@@ -32,6 +94,29 @@ def _extract_frame(vob_path: Path, output_png: Path) -> None:
         subprocess.run(cmd, check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
         raise ValidationError(f"ffmpeg failed to extract frame from {vob_path}: {e.stderr.decode()}")
+
+
+def _extract_frame_at(vob_path: Path, output_png: Path, timestamp: float) -> None:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-y",
+        "-ss",
+        f"{timestamp:.3f}",
+        "-i",
+        str(vob_path),
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        str(output_png),
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        raise ValidationError(
+            f"ffmpeg failed to extract frame from {vob_path}: {e.stderr}"
+        )
 
 
 def _probe_image_size(input_png: Path) -> Tuple[int, int]:
@@ -57,6 +142,237 @@ def _probe_image_size(input_png: Path) -> Tuple[int, int]:
     return int(width_str), int(height_str)
 
 
+def _probe_video_duration(vob_path: Path) -> float | None:
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(vob_path),
+    ]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return None
+
+
+def _connected_components(mask: Image.Image) -> list[tuple[int, int, int, int]]:
+    width, height = mask.size
+    pixels = mask.load()
+    visited = [[False for _ in range(width)] for _ in range(height)]
+    rects: list[tuple[int, int, int, int]] = []
+    for y in range(height):
+        for x in range(width):
+            if visited[y][x] or pixels[x, y] == 0:
+                continue
+            stack = [(x, y)]
+            visited[y][x] = True
+            min_x = max_x = x
+            min_y = max_y = y
+            while stack:
+                cx, cy = stack.pop()
+                min_x = min(min_x, cx)
+                max_x = max(max_x, cx)
+                min_y = min(min_y, cy)
+                max_y = max(max_y, cy)
+                for nx, ny in (
+                    (cx - 1, cy),
+                    (cx + 1, cy),
+                    (cx, cy - 1),
+                    (cx, cy + 1),
+                ):
+                    if 0 <= nx < width and 0 <= ny < height:
+                        if not visited[ny][nx] and pixels[nx, ny] != 0:
+                            visited[ny][nx] = True
+                            stack.append((nx, ny))
+            rects.append((min_x, min_y, max_x, max_y))
+    return rects
+
+
+def _detect_menu_rects_from_video(
+    vob_path: Path,
+    output_dir: Path,
+    expected: int,
+    frame_count: int = 6,
+) -> tuple[list[tuple[int, int, int, int]], bool]:
+    duration = _probe_video_duration(vob_path)
+    if duration is None or duration <= 0:
+        return [], True
+    step = max(0.5, duration / max(1, frame_count))
+    timestamps = [min(duration - 0.01, i * step) for i in range(frame_count)]
+    frame_paths: list[Path] = []
+    temp_dir = output_dir / "_menu_detect"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    for idx, ts in enumerate(timestamps, start=1):
+        frame_path = temp_dir / f"{vob_path.stem}_frame_{idx:02d}.png"
+        _extract_frame_at(vob_path, frame_path, ts)
+        frame_paths.append(frame_path)
+
+    aggregate = None
+    max_pair_diff = 0.0
+    for idx in range(1, len(frame_paths)):
+        prev = Image.open(frame_paths[idx - 1]).convert("RGB")
+        curr = Image.open(frame_paths[idx]).convert("RGB")
+        diff = ImageChops.difference(prev, curr).convert("L")
+        stat = ImageStat.Stat(diff)
+        max_pair_diff = max(max_pair_diff, stat.mean[0])
+        if aggregate is None:
+            aggregate = diff
+        else:
+            aggregate = ImageChops.lighter(aggregate, diff)
+
+    if aggregate is None:
+        return [], True
+    if max_pair_diff < 5.0:
+        return [], True
+    # Threshold the aggregate diff to isolate highlight regions.
+    mask = aggregate.point(lambda p: 255 if p > 20 else 0)
+    rects = _connected_components(mask)
+    if not rects:
+        return [], False
+
+    rects = sorted(
+        rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), reverse=True
+    )
+    rects = rects[:expected]
+
+    # Merge highly-overlapping boxes to avoid full-frame masks.
+    def _merge_rects(input_rects: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+        merged: list[tuple[int, int, int, int]] = []
+        for rect in input_rects:
+            x1, y1, x2, y2 = rect
+            replaced = False
+            for idx, (mx1, my1, mx2, my2) in enumerate(merged):
+                ix1 = max(x1, mx1)
+                iy1 = max(y1, my1)
+                ix2 = min(x2, mx2)
+                iy2 = min(y2, my2)
+                if ix2 >= ix1 and iy2 >= iy1:
+                    area = (x2 - x1 + 1) * (y2 - y1 + 1)
+                    marea = (mx2 - mx1 + 1) * (my2 - my1 + 1)
+                    inter = (ix2 - ix1 + 1) * (iy2 - iy1 + 1)
+                    if inter / min(area, marea) > 0.9:
+                        merged[idx] = (
+                            min(x1, mx1),
+                            min(y1, my1),
+                            max(x2, mx2),
+                            max(y2, my2),
+                        )
+                        replaced = True
+                        break
+            if not replaced:
+                merged.append(rect)
+        return merged
+
+    def _filter_rects(
+        input_rects: list[tuple[int, int, int, int]]
+    ) -> list[tuple[int, int, int, int]]:
+        width, height = aggregate.size
+        min_area = width * height * 0.005
+        max_area = width * height * 0.5
+        filtered = []
+        for rect in input_rects:
+            area = (rect[2] - rect[0] + 1) * (rect[3] - rect[1] + 1)
+            if min_area <= area <= max_area:
+                filtered.append(rect)
+        # Dedupe highly-overlapping rects.
+        deduped: list[tuple[int, int, int, int]] = []
+        for rect in filtered:
+            x1, y1, x2, y2 = rect
+            area = (x2 - x1 + 1) * (y2 - y1 + 1)
+            keep = True
+            for ox1, oy1, ox2, oy2 in deduped:
+                ix1 = max(x1, ox1)
+                iy1 = max(y1, oy1)
+                ix2 = min(x2, ox2)
+                iy2 = min(y2, oy2)
+                if ix2 >= ix1 and iy2 >= iy1:
+                    inter = (ix2 - ix1 + 1) * (iy2 - iy1 + 1)
+                    oarea = (ox2 - ox1 + 1) * (oy2 - oy1 + 1)
+                    if inter / min(area, oarea) > 0.9:
+                        keep = False
+                        break
+            if keep:
+                deduped.append(rect)
+        return deduped
+
+    rects = _merge_rects(rects)
+    rects = _filter_rects(rects)
+    rects = sorted(rects, key=lambda r: (r[1], r[0]))
+    return rects, False
+
+
+def _detect_menu_rects_from_static_frame(
+    vob_path: Path,
+    output_dir: Path,
+    expected: int,
+    block_size: int = 16,
+) -> list[tuple[int, int, int, int]]:
+    duration = _probe_video_duration(vob_path)
+    if duration is None or duration <= 0:
+        return []
+    timestamp = max(0.0, min(duration - 0.01, duration * 0.1))
+    temp_dir = output_dir / "_menu_detect"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    frame_path = temp_dir / f"{vob_path.stem}_static.png"
+    _extract_frame_at(vob_path, frame_path, timestamp)
+    image = Image.open(frame_path).convert("L")
+    width, height = image.size
+
+    mask = Image.new("L", (width, height), 0)
+    mask_pixels = mask.load()
+    for y in range(0, height, block_size):
+        for x in range(0, width, block_size):
+            crop = image.crop((x, y, min(width, x + block_size), min(height, y + block_size)))
+            stat = ImageStat.Stat(crop)
+            if stat.var[0] > 200.0:
+                for yy in range(y, min(height, y + block_size)):
+                    for xx in range(x, min(width, x + block_size)):
+                        mask_pixels[xx, yy] = 255
+
+    rects = _connected_components(mask)
+    if not rects:
+        return []
+    min_area = width * height * 0.005
+    max_area = width * height * 0.5
+    rects = [
+        rect
+        for rect in rects
+        if min_area
+        <= (rect[2] - rect[0] + 1) * (rect[3] - rect[1] + 1)
+        <= max_area
+    ]
+    rects = sorted(
+        rects, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), reverse=True
+    )
+    # Dedupe highly-overlapping rects.
+    deduped: list[tuple[int, int, int, int]] = []
+    for rect in rects:
+        x1, y1, x2, y2 = rect
+        area = (x2 - x1 + 1) * (y2 - y1 + 1)
+        keep = True
+        for ox1, oy1, ox2, oy2 in deduped:
+            ix1 = max(x1, ox1)
+            iy1 = max(y1, oy1)
+            ix2 = min(x2, ox2)
+            iy2 = min(y2, oy2)
+            if ix2 >= ix1 and iy2 >= iy1:
+                inter = (ix2 - ix1 + 1) * (iy2 - iy1 + 1)
+                oarea = (ox2 - ox1 + 1) * (oy2 - oy1 + 1)
+                if inter / min(area, oarea) > 0.9:
+                    keep = False
+                    break
+        if keep:
+            deduped.append(rect)
+    rects = deduped
+    rects = rects[:expected]
+    rects = sorted(rects, key=lambda r: (r[1], r[0]))
+    return rects
+
+
 def _crop_image(input_png: Path, output_png: Path, rect: RectModel) -> None:
     """Crops an image using ffmpeg."""
     # ffmpeg crop filter: crop=w:h:x:y
@@ -74,6 +390,148 @@ def _crop_image(input_png: Path, output_png: Path, rect: RectModel) -> None:
         raise ValidationError(
             f"ffmpeg failed to crop image {input_png}: {e.stderr.decode()}"
         )
+
+
+def _refine_cropped_image(path: Path) -> None:
+    try:
+        image = Image.open(path)
+    except Exception:
+        return
+    width, height = image.size
+    try:
+        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+    for text, x, y, w, h in zip(
+        data.get("text", []),
+        data.get("left", []),
+        data.get("top", []),
+        data.get("width", []),
+        data.get("height", []),
+        strict=False,
+    ):
+        if not text or not text.strip():
+            continue
+        min_x = min(min_x, x)
+        min_y = min(min_y, y)
+        max_x = max(max_x, x + w)
+        max_y = max(max_y, y + h)
+    if max_x <= min_x or max_y <= min_y:
+        return
+    pad = max(2, int(min(width, height) * 0.05))
+    left = max(0, min_x - pad)
+    top = max(0, min_y - pad)
+    right = min(width, max_x + pad)
+    bottom = min(height, max_y + pad)
+    if right - left < 2 or bottom - top < 2:
+        return
+    cropped = image.crop((left, top, right, bottom))
+    cropped.save(path)
+
+
+def _match_reference_rect(bg_path: Path, reference_path: Path) -> RectModel | None:
+    try:
+        bg = Image.open(bg_path).convert("L")
+        ref = Image.open(reference_path).convert("L")
+    except Exception:
+        return None
+    scale = 0.5
+    bg_small = bg.resize(
+        (max(1, int(bg.width * scale)), max(1, int(bg.height * scale)))
+    )
+    ref_small = ref.resize(
+        (max(1, int(ref.width * scale)), max(1, int(ref.height * scale)))
+    )
+    bw, bh = bg_small.size
+    rw, rh = ref_small.size
+    if rw >= bw or rh >= bh:
+        return None
+    best_score = None
+    best_xy = (0, 0)
+    step = 2
+    for y in range(0, bh - rh + 1, step):
+        for x in range(0, bw - rw + 1, step):
+            patch = bg_small.crop((x, y, x + rw, y + rh))
+            diff = ImageChops.difference(patch, ref_small)
+            stat = ImageStat.Stat(diff)
+            score = stat.mean[0]
+            if best_score is None or score < best_score:
+                best_score = score
+                best_xy = (x, y)
+    if best_score is None:
+        return None
+    full_x = int(best_xy[0] / scale)
+    full_y = int(best_xy[1] / scale)
+    return RectModel(x=full_x, y=full_y, w=ref.width, h=ref.height)
+
+
+def _ocr_line_rects(bg_path: Path) -> list[RectModel]:
+    try:
+        image = Image.open(bg_path)
+    except Exception:
+        return []
+    try:
+        data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+    except Exception:
+        return []
+    lines: dict[tuple[int, int, int], dict[str, int]] = {}
+    for text, left, top, width, height, block, par, line in zip(
+        data.get("text", []),
+        data.get("left", []),
+        data.get("top", []),
+        data.get("width", []),
+        data.get("height", []),
+        data.get("block_num", []),
+        data.get("par_num", []),
+        data.get("line_num", []),
+        strict=False,
+    ):
+        if not text or not text.strip():
+            continue
+        key = (int(block), int(par), int(line))
+        entry = lines.get(key)
+        if entry is None:
+            lines[key] = {
+                "left": int(left),
+                "top": int(top),
+                "right": int(left + width),
+                "bottom": int(top + height),
+            }
+        else:
+            entry["left"] = min(entry["left"], int(left))
+            entry["top"] = min(entry["top"], int(top))
+            entry["right"] = max(entry["right"], int(left + width))
+            entry["bottom"] = max(entry["bottom"], int(top + height))
+    rects: list[RectModel] = []
+    for bounds in lines.values():
+        w = bounds["right"] - bounds["left"]
+        h = bounds["bottom"] - bounds["top"]
+        if w < 10 or h < 10:
+            continue
+        rects.append(
+            RectModel(x=bounds["left"], y=bounds["top"], w=w, h=h)
+        )
+    rects.sort(key=lambda r: (r.y, r.x))
+    return rects
+
+
+def _choose_ocr_rect(
+    rects: list[RectModel],
+    entry_id: str,
+) -> RectModel | None:
+    if not rects:
+        return None
+    try:
+        index = int(entry_id.replace("btn", "")) - 1
+    except ValueError:
+        return None
+    if 0 <= index < len(rects):
+        return rects[index]
+    return None
 
 
 def _normalize_rect_to_image(rect: RectModel, size: Tuple[int, int]) -> RectModel:
@@ -95,6 +553,40 @@ def _normalize_rect_to_image(rect: RectModel, size: Tuple[int, int]) -> RectMode
     return rect
 
 
+def _shrink_rect(rect: RectModel, ratio: float) -> RectModel:
+    if ratio >= 1.0:
+        return rect
+    new_w = max(1, round(rect.w * ratio))
+    new_h = max(1, round(rect.h * ratio))
+    dx = (rect.w - new_w) // 2
+    dy = (rect.h - new_h) // 2
+    return RectModel(
+        x=rect.x + dx,
+        y=rect.y + dy,
+        w=new_w,
+        h=new_h,
+    )
+
+
+def _adjust_rect_for_text(
+    rect: RectModel,
+    width_ratio: float,
+    top_ratio: float,
+    bottom_ratio: float,
+    left_shift: int = 0,
+) -> RectModel:
+    new_w = max(1, round(rect.w * width_ratio))
+    top_pad = round(rect.h * top_ratio)
+    bottom_pad = round(rect.h * bottom_ratio)
+    new_h = rect.h + top_pad + bottom_pad
+    return RectModel(
+        x=max(0, rect.x + left_shift),
+        y=max(0, rect.y - top_pad),
+        w=new_w,
+        h=new_h,
+    )
+
+
 def _menu_base_id(menu_id: str | None) -> str | None:
     if not menu_id:
         return None
@@ -109,33 +601,119 @@ def run(
     video_ts_path: Optional[Path] = None,
     use_real_ffmpeg: bool = False,
     reference_dir: Optional[Path] = None,
+    use_reference_guidance: bool = False,
 ) -> MenuImagesModel:
     menu_map = read_json(menu_map_path, MenuMapModel)
+    def _entry_sort_key(entry: MenuEntryModel) -> tuple[int, str]:
+        if entry.playback_order is not None:
+            return (entry.playback_order, entry.entry_id)
+        digits = "".join(ch for ch in entry.entry_id if ch.isdigit())
+        return (int(digits) if digits else 0, entry.entry_id)
+    ordered_entries = sorted(menu_map.entries, key=_entry_sort_key)
     output_dir = out_dir / "menu_images"
     output_dir.mkdir(parents=True, exist_ok=True)
+    menu_overlap_flags: dict[str, bool] = {}
+    menu_rects: dict[str, list[tuple[str, RectModel]]] = {}
+    logger = logging.getLogger(__name__)
+    for entry in ordered_entries:
+        rect = entry.selection_rect or entry.highlight_rect or entry.rect
+        if rect is None:
+            continue
+        menu_id = entry.menu_id or "unknown_menu"
+        menu_rects.setdefault(menu_id, []).append((entry.entry_id, rect))
+    for menu_id, rects in menu_rects.items():
+        menu_overlap_flags[menu_id] = _rects_overlap_too_much(rects, 0.2)
 
     # Cache for extracted menu backgrounds to avoid redundant ffmpeg calls
     # menu_id -> background_png_path
     menu_backgrounds: dict[str, Path] = {}
     menu_sizes: dict[str, Tuple[int, int]] = {}
+    pgc_vob_map: dict[tuple[int, int], int] = {}
+
+    nav_path = out_dir / "nav.json"
+    if nav_path.is_file():
+        nav = read_json(nav_path, NavigationModel)
+        for title in nav.dvd.titles:
+            for pgc in title.pgcs:
+                if pgc.cells:
+                    vob_id = pgc.cells[0].vob_id
+                    if vob_id is not None:
+                        pgc_vob_map[(title.title_id, pgc.pgc_id)] = int(vob_id)
 
     entries: list[MenuImageEntry] = []
+    menu_ocr_rects: dict[str, list[RectModel]] = {}
+    used_rects: dict[str, list[tuple[str, RectModel]]] = {}
     placeholder_png = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+7VZkAAAAASUVORK5CYII="
     )
     if use_real_ffmpeg and video_ts_path is None and reference_dir is None:
         raise ValidationError("menu_images requires VIDEO_TS path or reference images")
 
-    for entry in menu_map.entries:
+    fallback_rects: dict[str, list[tuple[int, int, int, int]]] = {}
+    if use_real_ffmpeg and video_ts_path:
+        entries_by_menu: dict[str, list[MenuEntryModel]] = {}
+        for entry in ordered_entries:
+            menu_id = entry.menu_id or "unknown_menu"
+            entries_by_menu.setdefault(menu_id, []).append(entry)
+        for menu_id, menu_entries in entries_by_menu.items():
+            if any(
+                entry.selection_rect or entry.highlight_rect or entry.rect
+                for entry in menu_entries
+            ):
+                continue
+            menu_base = _menu_base_id(menu_id)
+            vob_path = None
+            if menu_base and menu_base.upper().startswith("VTSM"):
+                parts = menu_base.split("_")
+                if len(parts) >= 2 and parts[1].isdigit():
+                    vob_path = video_ts_path / f"VTS_{parts[1]}_1.VOB"
+            if vob_path is None:
+                candidates = sorted(video_ts_path.glob("VTS_*_1.VOB"))
+                vob_path = candidates[0] if candidates else None
+            if vob_path and vob_path.is_file():
+                rects, is_static = _detect_menu_rects_from_video(
+                    vob_path, output_dir, expected=len(menu_entries)
+                )
+                if len(rects) < len(menu_entries):
+                    static_rects = _detect_menu_rects_from_static_frame(
+                        vob_path, output_dir, expected=len(menu_entries)
+                    )
+                    if len(static_rects) > len(rects):
+                        rects = static_rects
+                if rects:
+                    fallback_rects[menu_id] = rects
+                    logger.info(
+                        "menu_images: detected %d rects from video for %s",
+                        len(rects),
+                        menu_id,
+                    )
+                elif is_static:
+                    logger.warning(
+                        "menu_images: video frames appear static for %s; "
+                        "dynamic highlight detection may be unavailable",
+                        menu_id,
+                    )
+
+    for entry in ordered_entries:
         dst = output_dir / f"{entry.entry_id}.png"
         assert_in_out_dir(dst, out_dir)
+        menu_id = entry.menu_id or "unknown_menu"
+        crop_rect = entry.selection_rect or entry.highlight_rect or entry.rect
+        if crop_rect is None and menu_id in fallback_rects:
+            rects = fallback_rects[menu_id]
+            index = 0
+            try:
+                index = int(entry.entry_id.replace("btn", "")) - 1
+            except ValueError:
+                index = 0
+            if 0 <= index < len(rects):
+                x1, y1, x2, y2 = rects[index]
+                crop_rect = RectModel(x=x1, y=y1, w=x2 - x1 + 1, h=y2 - y1 + 1)
 
         # 1. Reference images for explicit test runs (optional)
         if use_real_ffmpeg and reference_dir is not None:
             src_reference = reference_dir / f"{entry.entry_id}.png"
-            if src_reference.is_file():
-                shutil.copyfile(src_reference, dst)
-            else:
+            if not src_reference.is_file():
                 src_reference = None
         else:
             src_reference = None
@@ -147,11 +725,17 @@ def run(
                 shutil.copyfile(src_fixture, dst)
             else:
                 dst.write_bytes(placeholder_png)
-        elif src_reference is None and use_real_ffmpeg and video_ts_path:
+        elif use_real_ffmpeg and video_ts_path:
             # 3. Try real extraction from DVD VOBs
             # Heuristic: VMGM menus are in VIDEO_TS.VOB, VTSM menus are in VTS_XX_0.VOB
             menu_base = _menu_base_id(entry.menu_id)
             vob_path = None
+            if entry.target and entry.target.title_id and entry.target.pgc_id:
+                vob_id = pgc_vob_map.get((entry.target.title_id, entry.target.pgc_id))
+                if vob_id is not None:
+                    candidate = video_ts_path / f"VTS_{entry.target.title_id:02d}_{vob_id}.VOB"
+                    if candidate.is_file():
+                        vob_path = candidate
             if menu_base and menu_base.upper() == "VMGM":
                 vob_path = video_ts_path / "VIDEO_TS.VOB"
             elif menu_base and menu_base.upper().startswith("VTSM"):
@@ -178,12 +762,48 @@ def run(
 
                 bg_path = menu_backgrounds[entry.menu_id]
                 bg_size = menu_sizes[entry.menu_id]
-                crop_rect = entry.selection_rect or entry.highlight_rect or entry.rect
+                needs_overlap_fix = menu_overlap_flags.get(menu_id, False)
+                used_guidance = False
+                if (use_reference_guidance or needs_overlap_fix) and entry.menu_id:
+                    if entry.menu_id not in menu_ocr_rects:
+                        menu_ocr_rects[entry.menu_id] = _ocr_line_rects(bg_path)
+                    ocr_rects = menu_ocr_rects.get(entry.menu_id, [])
+                    chosen = _choose_ocr_rect(ocr_rects, entry.entry_id)
+                    if chosen is not None:
+                        crop_rect = chosen
+                        used_guidance = True
+                    elif use_reference_guidance and src_reference is not None:
+                        guided_rect = _match_reference_rect(bg_path, src_reference)
+                        if guided_rect is not None:
+                            crop_rect = guided_rect
+                            used_guidance = True
                 if not crop_rect:
                     raise ValidationError(
                         f"Missing button rect for entry_id {entry.entry_id}"
                     )
                 crop_rect = _normalize_rect_to_image(crop_rect, bg_size)
+                if (
+                    use_real_ffmpeg
+                    and not use_reference_guidance
+                    and crop_rect.w > 100
+                    and crop_rect.h < 90
+                ):
+                    rect_center_x = crop_rect.x + (crop_rect.w / 2)
+                    if rect_center_x > (bg_size[0] * 0.45):
+                        crop_rect = _adjust_rect_for_text(
+                            crop_rect, 0.88, 0.0, 0.0, left_shift=-8
+                        )
+                    else:
+                        if crop_rect.y > 200:
+                            crop_rect = _adjust_rect_for_text(
+                                crop_rect, 0.88, 0.2, 0.05
+                            )
+                        else:
+                            crop_rect = _adjust_rect_for_text(
+                                crop_rect, 0.88, 0.35, 0.1
+                            )
+                if use_reference_guidance and crop_rect.w > 100 and crop_rect.h > 50:
+                    crop_rect = _shrink_rect(crop_rect, 0.85)
                 if (
                     crop_rect.x + crop_rect.w > bg_size[0]
                     or crop_rect.y + crop_rect.h > bg_size[1]
@@ -193,15 +813,17 @@ def run(
                         f"{crop_rect} exceeds {bg_size[0]}x{bg_size[1]}"
                     )
                 _crop_image(bg_path, dst, crop_rect)
+                if use_reference_guidance and used_guidance:
+                    _refine_cropped_image(dst)
             else:
                 raise ValidationError(
                     f"Missing menu VOB for entry_id {entry.entry_id}"
                 )
-        elif src_reference is None and use_real_ffmpeg:
-            raise ValidationError(
-                f"Missing reference image for entry_id {entry.entry_id}"
-            )
+        elif src_reference is not None and use_real_ffmpeg and not use_reference_guidance:
+            shutil.copyfile(src_reference, dst)
 
+        if crop_rect is not None:
+            used_rects.setdefault(menu_id, []).append((entry.entry_id, crop_rect))
         entries.append(
             MenuImageEntry(
                 entry_id=entry.entry_id,
@@ -210,9 +832,11 @@ def run(
                 selection_rect=entry.selection_rect,
                 highlight_rect=entry.highlight_rect,
                 target=entry.target,
+                playback_order=entry.playback_order,
             )
         )
 
+    _assert_rects_have_low_overlap(used_rects)
     model = MenuImagesModel(images=entries)
     write_json(out_dir / "menu_images.json", model)
     return model

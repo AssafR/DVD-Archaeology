@@ -7,3 +7,22 @@ uv run dvdmenu-extract Q:\DVDs\UglyBetty_s01b --out out --ocr-reference tests/Ug
 
 uv run pytest tests/test_external_sample_uglybetty.py -k ocr_reference
 
+$env:OUT_DIR="C:\Users\Assaf\Desktop\Temporary\UglyBetty_s01b"
+uv run pytest tests/test_external_reference_compare.py -k reference --reference-verbose --reference-skip-extract -s
+
+
+uv run dvdmenu-extract "Q:\DVDs\UglyBetty_s01b" --out "C:\Users\Assaf\Desktop\Temporary\UglyBetty_s01b" --use-real-ffmpeg  --overwrite-outputs --force 
+
+
+
+"Q:\DVD\Ellen_Season_04\VIDEO_TS"
+
+
+
+uv run dvdmenu-extract "Q:\DVD\Ellen_Season_04\" --out "C:\Users\Assaf\Desktop\Temporary\Ellen_Season_04" --use-real-ffmpeg  --overwrite-outputs --force 
+
+
+uv run dvdmenu-extract "C:\Users\Assaf\program\DVD-Archaeology\DVD_Sample_01\" --out "C:\Users\Assaf\Desktop\Temporary\DVD_Sample_01" --use-real-ffmpeg  --overwrite-outputs --force 
+
+
+

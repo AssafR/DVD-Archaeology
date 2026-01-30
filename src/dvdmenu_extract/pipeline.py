@@ -40,10 +40,10 @@ STAGES = [
     "menu_validation",
     "timing",
     "segments",
-    "extract",
-    "verify_extract",
     "menu_images",
     "ocr",
+    "extract",
+    "verify_extract",
     "finalize",
 ]
 
@@ -106,7 +106,9 @@ class PipelineOptions:
         json_root_dir: bool,
         use_real_timing: bool,
         allow_dvd_ifo_fallback: bool,
+        debug_spu: bool = False,
         use_reference_images: bool = False,
+        use_reference_guidance: bool = False,
         overwrite_outputs: bool = False,
         ocr_reference_path: str | None = None,
     ) -> None:
@@ -119,7 +121,9 @@ class PipelineOptions:
         self.json_root_dir = json_root_dir
         self.use_real_timing = use_real_timing
         self.allow_dvd_ifo_fallback = allow_dvd_ifo_fallback
+        self.debug_spu = debug_spu
         self.use_reference_images = use_reference_images
+        self.use_reference_guidance = use_reference_guidance
         self.overwrite_outputs = overwrite_outputs
         self.ocr_reference_path = ocr_reference_path
 
@@ -229,6 +233,7 @@ def run_pipeline(
                         stage_root / "ingest.json",
                         stage_root,
                         allow_dvd_ifo_fallback=options.allow_dvd_ifo_fallback,
+                        debug_spu=options.debug_spu,
                     )
                     stage_status[stage_name] = "ok"
             elif stage_name == "menu_map":
@@ -270,6 +275,7 @@ def run_pipeline(
                         video_ts_path=video_ts_path,
                         use_real_ffmpeg=options.use_real_ffmpeg,
                         reference_dir=reference_dir,
+                        use_reference_guidance=options.use_reference_guidance,
                     )
                     stage_status[stage_name] = "ok"
             elif stage_name == "segments":

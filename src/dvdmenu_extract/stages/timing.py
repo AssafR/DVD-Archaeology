@@ -17,6 +17,7 @@ from dvdmenu_extract.models.segments import SegmentsModel
 from dvdmenu_extract.util.assertx import ValidationError
 from dvdmenu_extract.util.media import get_duration_seconds
 from dvdmenu_extract.util.io import read_json, write_json, write_raw_json
+import shutil
 import logging
 
 
@@ -151,6 +152,58 @@ def run(
                 out_dir / "timing_meta.json",
                 {"mode": "ifo", "source": "nav", "status": "ok", "files": []},
             )
+        ordered = sorted(
+            segments, key=lambda seg: (seg["start_time"], seg["entry_id"])
+        )
+        ordered_ids = [seg["entry_id"] for seg in ordered]
+        logger.info(
+            "Timing: playback order from start_time: %s",
+            ordered_ids,
+        )
+        order_by_id = {entry_id: idx + 1 for idx, entry_id in enumerate(ordered_ids)}
+        original_segments = segments
+        segments = []
+        for idx, entry_id in enumerate(ordered_ids):
+            seg = next((s for s in original_segments if s["entry_id"] == entry_id), None)
+            if seg is None:
+                continue
+            segments.append(
+                {
+                    "entry_id": f"btn{idx + 1}",
+                    "start_time": seg["start_time"],
+                    "end_time": seg["end_time"],
+                    "playback_order": idx + 1,
+                }
+            )
+        changed = False
+        for entry in menu_map.entries:
+            playback_order = order_by_id.get(entry.entry_id)
+            entry.playback_order = playback_order
+            if playback_order is not None:
+                new_id = f"btn{playback_order}"
+                if new_id != entry.entry_id:
+                    changed = True
+                    entry.entry_id = new_id
+        menu_map.entries = sorted(
+            menu_map.entries,
+            key=lambda e: (e.playback_order or 0, e.entry_id),
+        )
+        logger.info(
+            "Timing: remapped entry ids by playback order: %s",
+            [seg["entry_id"] for seg in segments],
+        )
+        write_json(out_dir / "menu_map.json", menu_map)
+        if changed:
+            logger.info("Timing: invalidating menu images + ocr after remap")
+            menu_images_json = out_dir / "menu_images.json"
+            ocr_json = out_dir / "ocr.json"
+            menu_images_dir = out_dir / "menu_images"
+            if menu_images_json.exists():
+                menu_images_json.unlink()
+            if ocr_json.exists():
+                ocr_json.unlink()
+            if menu_images_dir.exists():
+                shutil.rmtree(menu_images_dir)
         model = SegmentsModel.model_validate({"segments": segments})
         write_json(out_dir / "timing.json", model)
         return model

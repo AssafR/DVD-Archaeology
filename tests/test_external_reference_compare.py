@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 import shutil
 import warnings
+import os
 
 import pytest
 
@@ -23,6 +24,9 @@ EXTERNAL_SAMPLE = Path(r"Q:\DVDs\UglyBetty_s01b")
 REFERENCE_DIR = EXTERNAL_SAMPLE / "Reference"
 MAX_FRAME_DRIFT = 5
 SSIM_EARLY_STOP = 0.995
+OUTPUT_DIR = Path(
+    os.environ.get("OUT_DIR", str(EXTERNAL_SAMPLE / "chapters"))
+)
 
 
 def _has_ffmpeg() -> bool:
@@ -245,6 +249,16 @@ def _ref_sort_key(path: Path) -> int:
     return int(digits) if digits else 0
 
 
+def _output_sort_key(path: Path) -> int:
+    name = path.name
+    if "_" in name:
+        prefix = name.split("_", 1)[0]
+        if prefix.isdigit():
+            return int(prefix)
+    digits = "".join(ch for ch in path.stem if ch.isdigit())
+    return int(digits) if digits else 0
+
+
 @pytest.mark.skipif(
     not EXTERNAL_SAMPLE.exists(),
     reason="External sample not available on this machine",
@@ -258,7 +272,7 @@ def _ref_sort_key(path: Path) -> int:
     reason="ffmpeg/ffprobe not available on this machine",
 )
 def test_reference_output_matches_samples(tmp_path: Path, request) -> None:
-    out_dir = EXTERNAL_SAMPLE / "chapters"
+    out_dir = OUTPUT_DIR
     skip_extract = bool(request.config.getoption("--reference-skip-extract"))
     if not skip_extract:
         if out_dir.exists():
@@ -288,13 +302,17 @@ def test_reference_output_matches_samples(tmp_path: Path, request) -> None:
             repair="safe",
         )
 
-    extract = read_json(out_dir / "extract.json", ExtractModel)
-    outputs = sorted(extract.outputs, key=lambda item: _entry_sort_key(item.entry_id))
+    output_files = [
+        path
+        for path in (out_dir / "episodes").glob("*.mkv")
+        if path.name.split("_", 1)[0].isdigit()
+    ]
+    output_files = sorted(output_files, key=_output_sort_key)
     reference_files = sorted(REFERENCE_DIR.glob("*.ts"), key=_ref_sort_key)
 
-    assert outputs, "No extracted outputs found"
+    assert output_files, "No extracted outputs found"
     assert reference_files, "No reference .ts files found"
-    assert len(outputs) == len(reference_files)
+    assert len(output_files) == len(reference_files)
 
     sample_fracs = [0.1, 0.5, 0.9]
     verbose = bool(request.config.getoption("--reference-verbose"))
@@ -304,8 +322,7 @@ def test_reference_output_matches_samples(tmp_path: Path, request) -> None:
         if verbose:
             print(message)
     used_ssim_any = False
-    for output, ref in zip(outputs, reference_files, strict=False):
-        output_path = Path(output.output_path)
+    for output_path, ref in zip(output_files, reference_files, strict=False):
         assert output_path.is_file()
         assert ref.is_file()
         vprint(f"  Comparing {output_path} to {ref}.")

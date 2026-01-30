@@ -352,9 +352,15 @@ def run(
                 if not path.is_file():
                     raise ValidationError(f"Missing source file for extraction: {path}")
 
+    output_prefix = Path(ingest.input_path).name or "episode"
+    ordered_segments = sorted(
+        segments.segments,
+        key=lambda seg: (seg.playback_order or 0, seg.entry_id),
+    )
     outputs: list[ExtractEntryModel] = []
-    for segment in segments.segments:
-        filename = f"{segment.entry_id}.mkv"
+    for segment in ordered_segments:
+        order_index = (segment.playback_order or 1) - 1
+        filename = f"{output_prefix}_{order_index}.mkv"
         output_path = episodes_dir / filename
         assert_in_out_dir(output_path, out_dir)
 

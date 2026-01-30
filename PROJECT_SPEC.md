@@ -87,7 +87,11 @@ Stage A: ingest
 Stage B: nav_parse
 - Input: `ingest.json`
 - Output: `nav.json`, `nav_summary.json`, `svcd_nav.json`, `vcd_nav.json`, `raw/vcd-info.stdout.txt`, `raw/vcd-info.stderr.txt` (if using vcd-info)
-- Purpose: Parse navigation structure (titles, VTS, PGC, cells) and menu domains.
+- Purpose: Parse navigation structure (titles, VTS, PGC, cells) and menu domains. Uses SPU-based button detection when available, then NAV-pack parsing, with IFO-based tables as fallback. Button ordering uses a heuristic:
+  - build row-major and column-major candidate orders per menu
+  - build expected order from per-button playback targets (vob_id, first_sector)
+  - prioritize the spatial navigation direction (shorter path length)
+  - use playback-target ordering only when distances are close
 
 Stage C: menu_map
 - Input: `nav.json`
@@ -109,30 +113,31 @@ Stage F: segments
 - Output: `segments.json`
 - Purpose: Define the final segments to be extracted based on menu buttons and timing.
 
-Stage G: extract
-- Input: `segments.json`, `ingest.json`, `menu_map.json`, `nav.json`
-- Output: `episodes/*.mkv`, `extract.json`, `logs/*.log`
-- Purpose: Extract and remux video segments using FFmpeg.
-
-Stage H: verify_extract
-- Input: `segments.json`, `extract.json`
-- Output: `verify.json`
-- Purpose: Verify the integrity and correctness of the extracted files.
-
-Stage I: menu_images
-- Input: `menu_map.json`
+Stage G: menu_images
+- Input: `menu_map.json`, `nav.json`, `ingest.json`
 - Output: `menu_images.json`, `menu_images/{button_id}.png`
-- Purpose: Extract button images from menu domains. When `--use-real-ffmpeg` is enabled, crop from VOB menu frames; optional `Reference/` overrides are used only when `--use-reference-images` is set. Otherwise, use fixtures/placeholders for tests.
+- Purpose: Extract button images from menu domains. When `--use-real-ffmpeg` is enabled, crop from the correct menu VOB and validate rectangles against the actual frame size. Optional reference images are used only when `--use-reference-images` is set; `--use-reference-guide` enables OCR/template-guided refinement. In real mode, missing/invalid rectangles are treated as errors.
+- Fallback (menus without SPU/NAV highlights): if all rectangles are missing for a menu, detect highlight regions directly from video frames by sampling multiple frames, computing frame-to-frame differences, aggregating a change mask, and extracting connected-component bounding boxes. Use these rects (sorted by size then by y/x) to populate button crops.
 
-Stage J: ocr
+Stage H: ocr
 - Input: `menu_images.json`
 - Output: `ocr.json`
 - Purpose: Perform OCR on menu images to extract button labels. Real OCR is the default; use `--use-stub-ocr` for stub mode (which can read reference text files).
 
+Stage I: extract
+- Input: `segments.json`, `ingest.json`, `menu_map.json`, `nav.json`
+- Output: `episodes/*.mkv`, `extract.json`, `logs/*.log`
+- Purpose: Extract and remux video segments using FFmpeg.
+
+Stage J: verify_extract
+- Input: `segments.json`, `extract.json`
+- Output: `verify.json`
+- Purpose: Verify the integrity and correctness of the extracted files.
+
 Stage K: finalize
 - Input: all previous outputs
 - Output: `manifest.json`
-- Purpose: Merge all artifacts into a single stable manifest. Includes inputs, detected disc info, button labels, segment boundaries, output filenames, and stage statuses.
+- Purpose: Merge all artifacts into a single stable manifest. Includes inputs, detected disc info, button labels, segment boundaries, output filenames, and stage statuses. Supports `--overwrite-outputs` for stable regeneration.
 
 ## CLI requirements
 Implement a CLI command:
@@ -166,6 +171,13 @@ Use pytest. Create tests for:
   - duplicate button IDs rejected
   - negative timestamps rejected
 - Add snapshot-like tests for manifest schema stability.
+- External sample validation (UglyBetty):
+  - `tests/UglyBettyButtonCoordinates` contains approximate button locations in the format:
+    `button_number  x1,y1 - x2,y2`
+  - Only a subset of buttons is included; coordinates are approximate.
+  - OCR from these regions should match `tests/UglyBettyText`.
+  - Overlap and SSIM between these regions and pipeline outputs should be high.
+  - Use these as a development guide for button detection quality.
 
 Fixtures:
 - tests/fixtures/disc_minimal/ (fake VIDEO_TS)
