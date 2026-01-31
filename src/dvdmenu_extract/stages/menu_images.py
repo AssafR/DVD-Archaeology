@@ -451,11 +451,14 @@ def _detect_rects_from_image_file(
     if not thumbnails:
         return []
     
-    # Filter out edge rects
+    # Filter out edge rects (including bottom edge to avoid navigation UI)
     edge_margin = 20
+    bottom_margin = 100  # Larger margin at bottom to avoid navigation UI
+    # height variable is already defined from image dimensions above
     filtered_thumbnails = [
         rect for rect in thumbnails
-        if rect[0] > edge_margin and rect[1] > edge_margin
+        if (rect[0] > edge_margin and rect[1] > edge_margin and 
+            rect[3] < height - bottom_margin)  # Exclude rects near bottom edge
     ]
     
     # Dedupe by vertical position
@@ -515,40 +518,72 @@ def _detect_menu_rects_multi_page(
         logger.warning(f"Cannot determine duration for {vob_path}, falling back to single frame")
         return {}
     
-    # Calculate sample timestamps (avoid very end to skip fade-outs)
-    max_time = max(0.5, duration - 0.5)
-    timestamps = []
-    t = 0.1  # Start slightly after beginning
-    while t < max_time:
-        timestamps.append(t)
-        t += sample_interval
-    
-    if not timestamps:
-        timestamps = [0.1]
-    
-    logger.info(f"menu_images: multi-page detection: sampling {len(timestamps)} frames from {vob_path.name} "
-                f"(duration={duration:.1f}s, interval={sample_interval}s)")
-    
-    # Extract and detect on each frame
+    # Extract and detect on frames
     temp_dir = output_dir / "_menu_detect_multipage"
     temp_dir.mkdir(parents=True, exist_ok=True)
     
     frame_detections: list[tuple[Path, list[tuple[int, int, int, int]]]] = []
     
-    for idx, ts in enumerate(timestamps):
-        frame_path = temp_dir / f"{vob_path.stem}_page_{idx:02d}_t{ts:.1f}s.png"
-        try:
-            _extract_frame_at(vob_path, frame_path, ts)
-            # Run detection on this frame
-            rects = _detect_rects_from_image_file(frame_path, expected)
-            if rects:
-                logger.info(f"  Frame {idx} (t={ts:.1f}s): detected {len(rects)} rects: {rects}")
-                frame_detections.append((frame_path, rects))
-            else:
-                logger.debug(f"  Frame {idx} (t={ts:.1f}s): no rects detected")
-        except Exception as e:
-            logger.warning(f"Failed to extract/detect frame at t={ts:.1f}s: {e}")
-            continue
+    # For very short VOBs (menu VOBs often have unreliable timing),
+    # extract ALL frames instead of sampling by timestamp
+    if duration < 0.5:
+        logger.info(f"menu_images: VOB duration very short ({duration:.3f}s), extracting all frames")
+        
+        # Extract all frames from VOB
+        all_frames_pattern = temp_dir / f"{vob_path.stem}_frame_%03d.png"
+        import subprocess
+        cmd = [
+            "ffmpeg", "-i", str(vob_path),
+            str(all_frames_pattern),
+            "-y"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Find all extracted frames
+        extracted_frames = sorted(temp_dir.glob(f"{vob_path.stem}_frame_*.png"))
+        logger.info(f"  Extracted {len(extracted_frames)} frames from VOB")
+        
+        # Run detection on each frame
+        for idx, frame_path in enumerate(extracted_frames):
+            try:
+                rects = _detect_rects_from_image_file(frame_path, expected)
+                if rects:
+                    logger.info(f"  Frame {idx}: detected {len(rects)} rects: {rects}")
+                    frame_detections.append((frame_path, rects))
+                else:
+                    logger.debug(f"  Frame {idx}: no rects detected")
+            except Exception as e:
+                logger.warning(f"Failed to detect in frame {idx}: {e}")
+                continue
+    else:
+        # For longer VOBs, sample by timestamp
+        max_time = max(0.5, duration - 0.5)
+        timestamps = []
+        t = 0.1
+        while t < max_time:
+            timestamps.append(t)
+            t += sample_interval
+        
+        if not timestamps:
+            timestamps = [0.1]
+        
+        logger.info(f"menu_images: multi-page detection: sampling {len(timestamps)} frames from {vob_path.name} "
+                    f"(duration={duration:.1f}s, interval={sample_interval}s)")
+        
+        for idx, ts in enumerate(timestamps):
+            frame_path = temp_dir / f"{vob_path.stem}_page_{idx:02d}_t{ts:.1f}s.png"
+            try:
+                _extract_frame_at(vob_path, frame_path, ts)
+                # Run detection on this frame
+                rects = _detect_rects_from_image_file(frame_path, expected)
+                if rects:
+                    logger.info(f"  Frame {idx} (t={ts:.1f}s): detected {len(rects)} rects: {rects}")
+                    frame_detections.append((frame_path, rects))
+                else:
+                    logger.debug(f"  Frame {idx} (t={ts:.1f}s): no rects detected")
+            except Exception as e:
+                logger.warning(f"Failed to extract/detect frame at t={ts:.1f}s: {e}")
+                continue
     
     if not frame_detections:
         logger.warning("No buttons detected in any sampled frames")
@@ -580,7 +615,8 @@ def _detect_menu_rects_multi_page(
             if (other_frame, other_rect) in used_rects:
                 continue
             # Check if this is the same button (similar position and size)
-            if _rects_are_similar(rect, other_rect, position_threshold=50, size_threshold=0.3):
+            # Use stricter threshold (30px) for vertically-stacked buttons
+            if _rects_are_similar(rect, other_rect, position_threshold=30, size_threshold=0.3):
                 similar_rects.append((other_frame, other_rect))
                 used_rects.add((other_frame, other_rect))
         
@@ -709,9 +745,11 @@ def _detect_menu_rects_from_static_frame(
         if thumbnails:
             # Filter out edge rects (too close to frame borders)
             edge_margin = 20
+            bottom_margin = 100  # Larger margin at bottom to avoid navigation UI
             filtered_thumbnails = [
                 rect for rect in thumbnails
-                if rect[0] > edge_margin and rect[1] > edge_margin
+                if (rect[0] > edge_margin and rect[1] > edge_margin and 
+                    rect[3] < height - bottom_margin)  # Exclude rects near bottom edge
             ]
             logger.info("menu_images: %d thumbnails after edge filter: %s", len(filtered_thumbnails), filtered_thumbnails)
             
@@ -1172,6 +1210,8 @@ def run(
                     # - Buttons can expand horizontally without limit (to capture text)
                     # - Only prevent expansion if another button is on SAME ROW
                     # - Buttons above/below do NOT restrict horizontal expansion
+                    # - For multi-page menus, skip overlap checks (buttons on different pages can overlap)
+                    is_multipage = menu_id in button_frame_map
                     sorted_rects = sorted(rects, key=lambda r: (r[1], r[0]))  # Sort by y, then x
                     expanded_rects = []
                     for idx, rect in enumerate(sorted_rects):
@@ -1186,18 +1226,20 @@ def run(
                             max_x2 = min(719, x2 + expansion)
                             
                             # Check for buttons to the right on the same row (prevent overlap)
-                            # Note: Buttons above/below (different rows) are ignored
-                            for other_idx, other_rect in enumerate(sorted_rects):
-                                if other_idx == idx:
-                                    continue
-                                other_x1, other_y1, other_x2, other_y2 = other_rect
-                                
-                                # If on similar vertical position (same row), limit expansion
-                                if abs(other_y1 - y1) < 50:  # Same row threshold
-                                    # Leave a 10px gap to prevent overlap
-                                    max_x2 = min(max_x2, other_x1 - 10)
-                                # Note: buttons stacked vertically (same x, different y)
-                                # should NOT limit each other's horizontal expansion
+                            # Skip this check for multi-page menus (buttons on different pages can overlap)
+                            if not is_multipage:
+                                # Note: Buttons above/below (different rows) are ignored
+                                for other_idx, other_rect in enumerate(sorted_rects):
+                                    if other_idx == idx:
+                                        continue
+                                    other_x1, other_y1, other_x2, other_y2 = other_rect
+                                    
+                                    # If on similar vertical position (same row), limit expansion
+                                    if abs(other_y1 - y1) < 50:  # Same row threshold
+                                        # Leave a 10px gap to prevent overlap
+                                        max_x2 = min(max_x2, other_x1 - 10)
+                                    # Note: buttons stacked vertically (same x, different y)
+                                    # should NOT limit each other's horizontal expansion
                             
                             expanded_rects.append((x1, y1, max(x2, max_x2), y2))
                         else:
@@ -1426,7 +1468,13 @@ def run(
             )
         )
 
-    _assert_rects_have_low_overlap(used_rects)
+    # Skip overlap check for menus with multi-page detection
+    # (buttons on different pages can have overlapping coordinates)
+    menus_to_check = {
+        menu_id: rects for menu_id, rects in used_rects.items()
+        if menu_id not in button_frame_map
+    }
+    _assert_rects_have_low_overlap(menus_to_check)
     model = MenuImagesModel(images=entries)
     write_json(out_dir / "menu_images.json", model)
     return model
