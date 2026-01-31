@@ -89,7 +89,14 @@ Stage B: nav_parse
 - Output: `nav.json`, `nav_summary.json`, `svcd_nav.json`, `vcd_nav.json`, `raw/vcd-info.stdout.txt`, `raw/vcd-info.stderr.txt` (if using vcd-info)
 - Purpose: Parse navigation structure (titles, VTS, PGC, cells) and menu domains.
 - Button detection priority:
-  1. SPU-based (decode subpicture overlays from menu VOBs; scan 1024 sectors per VOBU)
+  1. **SPU-based (IMPLEMENTED)**: Decode subpicture overlays from menu VOBs
+     - Reads entire menu VOB file (typically <1MB for menus)
+     - Parses SPU packets from MPEG-PS private stream 1 (stream ID 0xBD, substream 0x20-0x3F)
+     - Reassembles fragmented SPU packets based on size headers (handles multi-packet menus)
+     - Decodes RLE-compressed bitmaps for each SPU packet (one per menu page)
+     - Finds connected components in decoded bitmaps (button highlights)
+     - Filters components by size (≥80x60px for buttons, smaller for navigation arrows)
+     - Returns button rectangles per menu page with page-to-frame mapping
   2. NAV-pack BTN_IT tables (from menu VOBs: VTSM/VMGM)
   3. NAV-pack BTN_IT tables from title VOBs (for menus embedded in title PGCs)
   4. IFO PGCIT tables (fallback; often lack coordinates)
@@ -124,8 +131,21 @@ Stage G: menu_images
 - Input: `menu_map.json`, `nav.json`, `ingest.json`
 - Output: `menu_images.json`, `menu_images/{button_id}.png`
 - Purpose: Extract button images from menu domains. When `--use-real-ffmpeg` is enabled, crop from the correct menu VOB and validate rectangles against the actual frame size. Optional reference images are used only when `--use-reference-images` is set; `--use-reference-guide` enables OCR/template-guided refinement. In real mode, missing/invalid rectangles are treated as errors.
-- Fallback (menus without SPU/NAV highlights): if all rectangles are missing for a menu, detect highlight regions directly from video frames by sampling multiple frames, computing frame-to-frame differences, aggregating a change mask, and extracting connected-component bounding boxes. Use these rects (sorted by size then by y/x) to populate button crops.
-- Text-adjacent expansion heuristic: for detected rects that are narrow/square (aspect ratio 0.5–2.0 and width < 30% of frame), expand the rectangle to the right by 2.5× its width to capture adjacent text labels (common in thumbnail+text menu layouts).
+- **Button rectangle detection (IMPLEMENTED)**:
+  1. **Primary: SPU overlay extraction** - Decodes subpicture overlays from menu VOBs to find button highlights
+     - Reads entire VOB file and parses SPU packets (private stream 1, substream 0x20-0x3F)
+     - Reassembles fragmented SPU packets based on size headers
+     - Decodes RLE-compressed bitmaps (one per menu page)
+     - Finds connected components in bitmaps (button highlights)
+     - Filters by size (≥80x60px for buttons, smaller elements are navigation arrows)
+     - Maps buttons to correct video frames using page information and temporal frame clustering
+     - Expands rectangles horizontally to capture adjacent text labels (common in DVD menus)
+  2. **Fallback: Frame-based detection** - If SPU extraction fails or finds insufficient buttons
+     - Extracts all frames from short menu VOBs (<0.5s duration)
+     - Groups frames by menu page using temporal clustering (detects page transitions via frame differencing)
+     - Per-page detection: finds dark thumbnail cores (60x60px with >75% dark pixels)
+     - Expands cores to full button rectangles and merges overlapping candidates
+- Text-adjacent expansion: Expands button rectangles horizontally (typically 3-4× original width) to capture text labels positioned to the right of thumbnails
 
 Stage H: ocr
 - Input: `menu_images.json`

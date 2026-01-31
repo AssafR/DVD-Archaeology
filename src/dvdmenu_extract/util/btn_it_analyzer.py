@@ -179,6 +179,13 @@ def parse_button_info_from_nav_pack(nav_pack: bytes, nav_pack_idx: int) -> Butto
         else:
             vm_cmd_up = vm_cmd_down = vm_cmd_left = vm_cmd_right = 0
         
+        # Log ALL active buttons (with or without rectangles) for debugging
+        if btn_idx in active_indices:
+            if rect is not None:
+                logger.info(f"    BTN_IT Button {btn_idx}: rect={rect}")
+            else:
+                logger.info(f"    BTN_IT Button {btn_idx}: NO RECTANGLE (rect=None)")
+        
         buttons[btn_idx] = ButtonInfo(
             index=btn_idx,
             active=btn_idx in active_indices,
