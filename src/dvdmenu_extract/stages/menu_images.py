@@ -543,18 +543,303 @@ def _detect_menu_rects_multi_page(
         extracted_frames = sorted(temp_dir.glob(f"{vob_path.stem}_frame_*.png"))
         logger.info(f"  Extracted {len(extracted_frames)} frames from VOB")
         
-        # Run detection on each frame
-        for idx, frame_path in enumerate(extracted_frames):
-            try:
-                rects = _detect_rects_from_image_file(frame_path, expected)
-                if rects:
-                    logger.info(f"  Frame {idx}: detected {len(rects)} rects: {rects}")
-                    frame_detections.append((frame_path, rects))
+        # CRITICAL: Separate frames by menu page BEFORE differencing
+        # Comparing frames from different pages detects background differences, not highlights!
+        logger.info(f"  Separating frames by menu page to avoid false positives...")
+        
+        from PIL import ImageChops, ImageStat
+        
+        # Simple heuristic: Split frames into groups based on visual similarity
+        # Frames from the same page should be very similar (only highlight moves)
+        # Frames from different pages will have larger differences (background changes)
+        
+        def group_frames_by_page(frames):
+            """Group frames by menu page using temporal clustering."""
+            if len(frames) < 2:
+                return [frames]
+            
+            # Compare consecutive frames to find page boundaries
+            page_groups = []
+            current_page = [frames[0]]
+            
+            for idx in range(1, len(frames)):
+                prev = Image.open(frames[idx - 1]).convert("L")
+                curr = Image.open(frames[idx]).convert("L")
+                diff = ImageChops.difference(prev, curr).convert("L")
+                
+                # Calculate mean difference
+                pixels = list(diff.getdata())
+                mean_diff = sum(pixels) / len(pixels)
+                
+                # Log differences to find appropriate threshold
+                if idx <= 15 or mean_diff > 8:  # Log first frames and significant changes
+                    logger.info(f"    Frame {idx-1}->{idx}: diff={mean_diff:.2f}")
+                
+                # Large difference = page transition (background changes)
+                # Small difference = same page (only highlight moves)
+                # For this DVD: most frames diff=0, page boundary ~5-6
+                if mean_diff > 4:  # Threshold to detect page boundaries
+                    logger.info(f"    >>> Page boundary at frame {idx} (diff={mean_diff:.1f})")
+                    page_groups.append(current_page)
+                    current_page = [frames[idx]]
                 else:
-                    logger.debug(f"  Frame {idx}: no rects detected")
-            except Exception as e:
-                logger.warning(f"Failed to detect in frame {idx}: {e}")
+                    current_page.append(frames[idx])
+            
+            page_groups.append(current_page)
+            return page_groups
+        
+        frame_pages = group_frames_by_page(extracted_frames)
+        logger.info(f"  Detected {len(frame_pages)} menu pages:")
+        for idx, page_frames in enumerate(frame_pages):
+            logger.info(f"    Page {idx}: {len(page_frames)} frames")
+        
+        # Create aggregate diff for EACH page separately
+        all_page_highlights = []
+        
+        for page_idx, page_frames in enumerate(frame_pages):
+            if len(page_frames) < 2:
+                logger.info(f"  Page {page_idx}: Only 1 frame, skipping diff")
                 continue
+            
+            logger.info(f"  Page {page_idx}: Running frame diff on {len(page_frames)} frames...")
+            
+            aggregate_diff = None
+            for idx in range(1, len(page_frames)):
+                try:
+                    prev = Image.open(page_frames[idx - 1]).convert("RGB")
+                    curr = Image.open(page_frames[idx]).convert("RGB")
+                    diff = ImageChops.difference(prev, curr).convert("L")
+                    
+                    if aggregate_diff is None:
+                        aggregate_diff = diff
+                    else:
+                        aggregate_diff = ImageChops.lighter(aggregate_diff, diff)
+                except Exception as e:
+                    logger.warning(f"Failed to diff frames: {e}")
+                    continue
+        
+            if aggregate_diff is None:
+                logger.warning(f"  Page {page_idx}: No diff created")
+                continue
+            # VERY sensitive threshold to capture all button highlights
+            # Even subtle changes should be detected
+            mask = aggregate_diff.point(lambda p: 255 if p > 3 else 0)
+            
+            # Apply dilation to connect nearby changed regions (highlight borders + interior)
+            from PIL import ImageFilter
+            
+            # Moderate dilation - enough to connect borders but not merge separate buttons
+            for _ in range(2):
+                mask = mask.filter(ImageFilter.MaxFilter(size=5))
+            
+            # Light erosion to clean up noise
+            mask = mask.filter(ImageFilter.MinFilter(size=3))
+            
+            # Save debug image to see what frame diff is detecting
+            debug_mask_path = temp_dir / "debug_frame_diff_mask.png"
+            mask.save(debug_mask_path)
+            logger.info(f"  Saved frame diff mask to {debug_mask_path}")
+            
+            diff_rects = _connected_components(mask)
+            
+            logger.info(f"  Page {page_idx}: Frame diff found {len(diff_rects)} raw changed regions")
+            
+            # Log all raw regions for debugging
+            for idx, r in enumerate(diff_rects[:10]):
+                x1, y1, x2, y2 = r
+                w, h = x2 - x1 + 1, y2 - y1 + 1
+                logger.info(f"    Raw region {idx}: ({x1},{y1})->({x2},{y2}) size:{w}x{h}")
+            
+            # Strategy: Find consistent HIGHLIGHT dimensions, then expand to full button
+            # 1. Filter to highlight-sized regions (typically 80-150px wide, 60-120px tall)
+            # 2. Find most common dimensions (highlights should be same size)
+            # 3. Use those to validate/correct detected regions
+            # 4. Expand from highlight to full button (adding text area)
+            
+            width, height = aggregate_diff.size
+            bottom_margin = 100
+            
+            # Collect candidate highlight regions (left side, reasonable size)
+            highlight_candidates = []
+            
+            for r in diff_rects:
+                x1, y1, x2, y2 = r
+                w = x2 - x1 + 1
+                h = y2 - y1 + 1
+                
+                # Filter to highlight-sized regions on left side
+                if (30 <= w <= 200 and 30 <= h <= 150 and
+                    x1 < width * 0.5 and y2 < height - bottom_margin):
+                    highlight_candidates.append((x1, y1, x2, y2, w, h))
+                    logger.info(f"    Candidate highlight: ({x1},{y1})->({x2},{y2}) size:{w}x{h}")
+            
+            logger.info(f"  Found {len(highlight_candidates)} highlight-sized regions")
+            
+            # Initialize to avoid scope issues
+            filtered_expanded = []
+            
+            if not highlight_candidates:
+                logger.warning("  No highlight-sized regions found")
+            else:
+                # Analyze dimensions to find consistent highlight size
+                widths = [c[4] for c in highlight_candidates]
+                heights = [c[5] for c in highlight_candidates]
+                
+                widths.sort()
+                heights.sort()
+                
+                # Use median dimensions as the "standard" highlight size
+                median_width = widths[len(widths) // 2]
+                median_height = heights[len(heights) // 2]
+                
+                logger.info(f"  Highlight dimensions: median width={median_width}px, height={median_height}px")
+                
+                # Find x-range where most highlights appear
+                left_edges = sorted([c[0] for c in highlight_candidates])
+                right_edges = sorted([c[2] for c in highlight_candidates])
+                
+                # Use most common left/right edges (with tolerance)
+                typical_left = left_edges[len(left_edges) // 3]  # 33rd percentile
+                typical_right = right_edges[2 * len(right_edges) // 3]  # 66th percentile
+                
+                logger.info(f"  Typical highlight x-range: {typical_left} to {typical_right}")
+                
+                # Group highlights by vertical position
+                highlights_by_y = []
+                for x1, y1, x2, y2, w, h in highlight_candidates:
+                    # Only keep if dimensions are reasonably close to median (within 40%)
+                    width_ok = abs(w - median_width) <= median_width * 0.4
+                    height_ok = abs(h - median_height) <= median_height * 0.4
+                    
+                    if width_ok and height_ok:
+                        highlights_by_y.append((x1, y1, x2, y2))
+                        logger.info(f"    ✓ Accepted: ({x1},{y1})->({x2},{y2}) {w}x{h}")
+                    else:
+                        logger.info(f"    ✗ Rejected: ({x1},{y1})->({x2},{y2}) {w}x{h} " +
+                                   f"(w_ok={width_ok} h_ok={height_ok})")
+                
+                # Sort by y-position
+                highlights_by_y.sort(key=lambda r: r[1])
+                
+                logger.info(f"  {len(highlights_by_y)} highlights match consistent dimensions")
+                
+                # Group by vertical proximity (same button)
+                grouped = []
+                
+                if highlights_by_y:
+                    current_group = [highlights_by_y[0]]
+                    
+                    for rect in highlights_by_y[1:]:
+                        prev_y2 = current_group[-1][3]
+                        curr_y1 = rect[1]
+                        
+                        # If overlap or very close (within 10px), same button
+                        if curr_y1 <= prev_y2 + 10:
+                            current_group.append(rect)
+                        else:
+                            grouped.append(current_group)
+                            current_group = [rect]
+                    
+                    grouped.append(current_group)
+                
+                logger.info(f"  Page {page_idx}: Grouped into {len(grouped)} distinct buttons")
+                
+                # For each button, create bounding box using consistent x-coords
+                for group in grouped:
+                    # Merge all rects in group
+                    group_x1 = min(r[0] for r in group)
+                    group_y1 = min(r[1] for r in group)
+                    group_x2 = max(r[2] for r in group)
+                    group_y2 = max(r[3] for r in group)
+                    
+                    # Normalize x-coords to consistent highlight width
+                    # Use typical_left and detected width
+                    highlight_x1 = typical_left
+                    highlight_x2 = typical_left + median_width
+                    
+                    # Keep y-coords from detection (buttons at different heights)
+                    highlight_y1 = group_y1
+                    highlight_y2 = group_y2
+                    
+                    filtered_expanded.append((highlight_x1, highlight_y1, highlight_x2, highlight_y2))
+                    
+                    logger.info(f"  Highlight region: ({highlight_x1},{highlight_y1})->({highlight_x2},{highlight_y2}), " +
+                              f"size:{highlight_x2-highlight_x1}x{highlight_y2-highlight_y1}")
+            
+            # Merge overlapping regions
+            def merge_overlapping(rects):
+                if not rects:
+                    return []
+                merged = [rects[0]]
+                for rect in rects[1:]:
+                    x1, y1, x2, y2 = rect
+                    did_merge = False
+                    for idx, (mx1, my1, mx2, my2) in enumerate(merged):
+                        ix1, iy1 = max(x1, mx1), max(y1, my1)
+                        ix2, iy2 = min(x2, mx2), min(y2, my2)
+                        if ix2 >= ix1 and iy2 >= iy1:
+                            inter = (ix2 - ix1 + 1) * (iy2 - iy1 + 1)
+                            area1 = (x2 - x1 + 1) * (y2 - y1 + 1)
+                            area2 = (mx2 - mx1 + 1) * (my2 - my1 + 1)
+                            if inter / min(area1, area2) > 0.5:
+                                merged[idx] = (min(x1, mx1), min(y1, my1), 
+                                             max(x2, mx2), max(y2, my2))
+                                did_merge = True
+                                break
+                    if not did_merge:
+                        merged.append(rect)
+                return merged
+            
+            filtered_expanded = merge_overlapping(filtered_expanded)
+            filtered_expanded.sort(key=lambda r: (r[1], r[0]))
+            
+            logger.info(f"  After filtering/expansion: {len(filtered_expanded)} button regions")
+            
+            # For each region, find the frame where it appears best
+            for rect in filtered_expanded:
+                x1, y1, x2, y2 = rect
+                logger.info(f"  Button region: ({x1},{y1})->({x2},{y2}), size:{x2-x1+1}x{y2-y1+1}")
+                
+                best_frame = None
+                best_score = 0
+                
+                # Search only within this page's frames
+                for frame_path in page_frames:
+                    try:
+                        frame_img = Image.open(frame_path).convert("L")
+                        frame_pixels = frame_img.load()
+                        
+                        region_values = []
+                        for y in range(max(0, y1), min(frame_img.height, y2 + 1)):
+                            for x in range(max(0, x1), min(frame_img.width, x2 + 1)):
+                                region_values.append(frame_pixels[x, y])
+                        
+                        if region_values:
+                            mean = sum(region_values) / len(region_values)
+                            variance = sum((v - mean) ** 2 for v in region_values) / len(region_values)
+                            
+                            if variance > best_score:
+                                best_score = variance
+                                best_frame = frame_path
+                    except:
+                        continue
+                
+                if best_frame:
+                    frame_detections.append((best_frame, [rect]))
+                    logger.info(f"    -> {best_frame.name} (var:{best_score:.1f})")
+        
+        # Fallback to static detection if frame diff fails
+        if not frame_detections:
+            logger.info(f"  Frame diff found nothing, using static detection...")
+            for idx, frame_path in enumerate(extracted_frames[:3]):
+                try:
+                    rects = _detect_rects_from_image_file(frame_path, expected)
+                    if rects:
+                        logger.info(f"  Frame {idx}: detected {len(rects)} rects")
+                        frame_detections.append((frame_path, rects))
+                except Exception as e:
+                    logger.warning(f"Failed to detect in frame {idx}: {e}")
+                    continue
     else:
         # For longer VOBs, sample by timestamp
         max_time = max(0.5, duration - 0.5)
