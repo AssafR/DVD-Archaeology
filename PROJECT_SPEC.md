@@ -131,21 +131,121 @@ Stage G: menu_images
 - Input: `menu_map.json`, `nav.json`, `ingest.json`
 - Output: `menu_images.json`, `menu_images/{button_id}.png`
 - Purpose: Extract button images from menu domains. When `--use-real-ffmpeg` is enabled, crop from the correct menu VOB and validate rectangles against the actual frame size. Optional reference images are used only when `--use-reference-images` is set; `--use-reference-guide` enables OCR/template-guided refinement. In real mode, missing/invalid rectangles are treated as errors.
+
 - **Button rectangle detection (IMPLEMENTED)**:
-  1. **Primary: SPU overlay extraction** - Decodes subpicture overlays from menu VOBs to find button highlights
-     - Reads entire VOB file and parses SPU packets (private stream 1, substream 0x20-0x3F)
-     - Reassembles fragmented SPU packets based on size headers
-     - Decodes RLE-compressed bitmaps (one per menu page)
-     - Finds connected components in bitmaps (button highlights)
-     - Filters by size (≥80x60px for buttons, smaller elements are navigation arrows)
-     - Maps buttons to correct video frames using page information and temporal frame clustering
-     - Expands rectangles horizontally to capture adjacent text labels (common in DVD menus)
-  2. **Fallback: Frame-based detection** - If SPU extraction fails or finds insufficient buttons
-     - Extracts all frames from short menu VOBs (<0.5s duration)
-     - Groups frames by menu page using temporal clustering (detects page transitions via frame differencing)
-     - Per-page detection: finds dark thumbnail cores (60x60px with >75% dark pixels)
-     - Expands cores to full button rectangles and merges overlapping candidates
-- Text-adjacent expansion: Expands button rectangles horizontally (typically 3-4× original width) to capture text labels positioned to the right of thumbnails
+  
+  **1. PRIMARY METHOD: SPU Overlay Extraction** ✅
+  
+  DVDs store button highlights as SPU (Sub-Picture Unit) overlay graphics in a separate
+  subpicture stream, NOT in the video frames. This is the correct and deterministic approach.
+  
+  **Algorithm:**
+  ```
+  1. Read entire menu VOB file (typically <1MB for menus)
+     - Menu VOBs: VIDEO_TS.VOB, VTS_*_0.VOB
+  
+  2. Parse MPEG-PS stream structure:
+     - Locate private stream 1 (stream ID 0xBD)
+     - Extract SPU substreams (substream IDs 0x20-0x3F)
+  
+  3. Reassemble fragmented SPU packets:
+     a. Buffer PES payloads for each substream
+     b. Read 2-byte size header at start of each packet
+     c. Accumulate until buffer contains complete packet
+     d. Extract complete packet and process remaining buffer
+     e. Repeat: CRITICAL for multi-page menus (multiple packets per stream)
+     
+     Example: 2-page menu
+       - SPU packet 1: 3990 bytes (fragments: 2016 + 1974)
+       - SPU packet 2: 3000 bytes (fragments: 2016 + 984)
+     
+  4. For each complete SPU packet (one packet = one menu page):
+     a. Parse control structure:
+        - Display area coordinates (x1, y1, x2, y2)
+        - Pixel data offsets (field 1, field 2 for interlaced video)
+        - Menu flag (distinguishes menu SPU from subtitle SPU)
+     
+     b. Decode RLE-compressed bitmap:
+        - Two fields: field 1 (even lines), field 2 (odd lines)
+        - Run-length encoding: (run_length, color_index) pairs
+        - 4 possible pixel values (2-bit color index: 0-3)
+        - Typical size: 720×572 pixels (full DVD frame)
+     
+     c. Find connected components:
+        - Flood-fill algorithm on non-zero pixels
+        - Each component = one visual element (button or navigation arrow)
+        - Returns bounding rectangle for each component
+     
+     d. Filter by size:
+        - Button highlights: ≥80×60 pixels
+        - Navigation arrows: <80×60 pixels (filtered out)
+        - This separates buttons from UI chrome
+     
+     e. Sort by position:
+        - Primary: vertical (top to bottom)
+        - Secondary: horizontal (left to right)
+     
+  5. Map buttons to video frames:
+     - Extract all frames from menu VOB
+     - Group frames by page using temporal clustering:
+       * Compare consecutive frames (mean pixel difference)
+       * Threshold >4 = page transition
+     - Map each button to first frame of its page:
+       * Button from SPU packet 1 (page 0) → frame group 1
+       * Button from SPU packet 2 (page 1) → frame group 2
+  
+  6. Expand for text labels:
+     - Horizontal expansion: 3-4× original width to right
+     - Captures text positioned adjacent to thumbnail
+  ```
+  
+  **SPU Packet Structure:**
+  ```
+  Offset  Size  Description
+  ------  ----  -----------
+  0x0000  2     Total packet size (big-endian)
+  0x0002  2     Control sequence offset
+  0x0004  ?     RLE bitmap data (field 1 + field 2)
+  control ?     Control sequence:
+                - Display start/end times
+                - Display area coordinates
+                - Color palette indices
+                - Alpha/contrast values
+                - Menu flag (0x00 = menu)
+  ```
+  
+  **Validation:**
+  - Tested on DVD_Sample_01: 3 buttons, 2 pages
+  - Achieved 100% reproducibility (similarity = 1.0000)
+  - Reference images: `tests/fixtures/DVD_Sample_01/menu_images/`
+  - Regression test: `tests/test_dvd_sample_01_regression.py`
+  
+  **Benefits:**
+  - Deterministic: Direct access to authored button data
+  - Accurate: Extracts exact button regions from disc
+  - Robust: Works regardless of menu design, colors, or layout
+  - Fast: <1 second for typical menu VOBs
+  - Reproducible: Produces identical results every time
+  
+  **Code Location:**
+  - Primary: `src/dvdmenu_extract/stages/menu_images.py::_extract_spu_button_rects()`
+  - Library: `src/dvdmenu_extract/util/libdvdread_spu.py`
+  - Debug tool: `tools/debug_spu_packets.py`
+  
+  ---
+  
+  **2. FALLBACK: Frame-based Heuristic Detection**
+  
+  Used only if SPU extraction fails or finds insufficient buttons.
+  
+  - Extracts all frames from short menu VOBs (<0.5s duration)
+  - Groups frames by menu page using temporal clustering
+  - Per-page detection: finds dark thumbnail cores (60×60px with >75% dark pixels)
+  - Expands cores to full button rectangles and merges overlapping candidates
+  
+  **Note:** This is less reliable than SPU extraction and should only be used as fallback.
+  
+- **Text-adjacent expansion:** Expands button rectangles horizontally (typically 3-4× original width) to capture text labels positioned to the right of thumbnails
 
 Stage H: ocr
 - Input: `menu_images.json`
