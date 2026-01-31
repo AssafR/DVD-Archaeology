@@ -311,6 +311,9 @@ def _detect_menu_rects_from_static_frame(
     expected: int,
     block_size: int = 16,
 ) -> list[tuple[int, int, int, int]]:
+    import logging
+
+    logger = logging.getLogger(__name__)
     duration = _probe_video_duration(vob_path)
     if duration is None or duration <= 0:
         return []
@@ -321,7 +324,134 @@ def _detect_menu_rects_from_static_frame(
     _extract_frame_at(vob_path, frame_path, timestamp)
     image = Image.open(frame_path).convert("L")
     width, height = image.size
+    pixels = image.load()
 
+    # First try: detect dark rectangular thumbnail regions (common in DVD menus)
+    dark_block_size = 8
+    dark_blocks = []
+    for by in range(0, height, dark_block_size):
+        for bx in range(0, width // 2, dark_block_size):  # Search left half
+            values = []
+            for y in range(by, min(by + dark_block_size, height)):
+                for x in range(bx, min(bx + dark_block_size, width)):
+                    values.append(pixels[x, y])
+            if not values:
+                continue
+            mean_val = sum(values) / len(values)
+            # Dark threshold for thumbnail content (not too aggressive)
+            if mean_val < 65:
+                dark_blocks.append((bx, by, bx + dark_block_size - 1, by + dark_block_size - 1))
+
+    if dark_blocks:
+        # Merge adjacent dark blocks iteratively
+        merged = []
+        used = set()
+        for idx, (x1, y1, x2, y2) in enumerate(dark_blocks):
+            if idx in used:
+                continue
+            current = [x1, y1, x2, y2]
+            changed = True
+            while changed:
+                changed = False
+                for jdx, (ox1, oy1, ox2, oy2) in enumerate(dark_blocks):
+                    if jdx in used or jdx == idx:
+                        continue
+                    # Strictly adjacent (within 1 block size, no gaps)
+                    if (abs(ox1 - current[2]) <= dark_block_size and 
+                        not (oy2 < current[1] or oy1 > current[3])):
+                        # Horizontally adjacent
+                        current = [
+                            min(current[0], ox1),
+                            min(current[1], oy1),
+                            max(current[2], ox2),
+                            max(current[3], oy2),
+                        ]
+                        used.add(jdx)
+                        changed = True
+                    elif (abs(oy1 - current[3]) <= dark_block_size and 
+                          not (ox2 < current[0] or ox1 > current[2])):
+                        # Vertically adjacent - merge freely but with height limit
+                        # This lets thumbnails grow fully but prevents merging across different buttons
+                        new_height = max(current[3], oy2) - min(current[1], oy1) + 1
+                        if new_height <= 180:  # Max thumbnail height
+                            current = [
+                                min(current[0], ox1),
+                                min(current[1], oy1),
+                                max(current[2], ox2),
+                                max(current[3], oy2),
+                            ]
+                            used.add(jdx)
+                            changed = True
+            merged.append(tuple(current))
+
+        # Filter by thumbnail size and compactness
+        thumbnails = []
+        # Sort by size to see largest candidates first
+        merged_sorted = sorted(merged, key=lambda r: (r[2]-r[0]+1) * (r[3]-r[1]+1), reverse=True)
+        logger.info("menu_images: merged dark regions (showing first 15 by size): %s", 
+                    [(r, (r[2]-r[0]+1, r[3]-r[1]+1)) for r in merged_sorted[:15]])
+        
+        for rect in merged_sorted:
+            x1, y1, x2, y2 = rect
+            w = x2 - x1 + 1
+            h = y2 - y1 + 1
+            bbox_area = w * h
+            
+            # Count actual dark pixels in this bounding box
+            dark_pixel_count = 0
+            for y in range(y1, min(y2 + 1, height)):
+                for x in range(x1, min(x2 + 1, width)):
+                    if pixels[x, y] < 65:  # Match the detection threshold
+                        dark_pixel_count += 1
+            
+            compactness = dark_pixel_count / bbox_area if bbox_area > 0 else 0
+            
+            # Thumbnail candidates: reasonable size, decent compactness (solid rectangles)
+            # Relaxed compactness to 0.25 to catch more candidates
+            if (50 <= w <= 300 and 50 <= h <= 300 and 
+                2500 <= bbox_area <= 90000 and compactness > 0.25):
+                thumbnails.append(rect)
+                logger.info("menu_images: thumbnail candidate: rect=%s size=(%d,%d) compactness=%.2f", 
+                           rect, w, h, compactness)
+
+        if thumbnails:
+            # Filter out edge rects (too close to frame borders)
+            edge_margin = 20
+            filtered_thumbnails = [
+                rect for rect in thumbnails
+                if rect[0] > edge_margin and rect[1] > edge_margin
+            ]
+            logger.info("menu_images: %d thumbnails after edge filter: %s", len(filtered_thumbnails), filtered_thumbnails)
+            
+            # Dedupe by vertical position (may return fewer than expected for multi-page menus)
+            # Remove vertically overlapping duplicates (keep largest)
+            deduped = []
+            for rect in sorted(filtered_thumbnails, key=lambda r: (r[2]-r[0])*(r[3]-r[1]), reverse=True):
+                y_center = (rect[1] + rect[3]) / 2
+                overlaps = False
+                for existing in deduped:
+                    existing_y_center = (existing[1] + existing[3]) / 2
+                    if abs(y_center - existing_y_center) < 100:  # Same row threshold
+                        overlaps = True
+                        break
+                if not overlaps:
+                    deduped.append(rect)
+            # Sort by vertical position
+            deduped.sort(key=lambda r: (r[1], r[0]))
+            logger.info("menu_images: static frame detected %d thumbnail(s) after dedup (expected %d): %s", 
+                       len(deduped), expected, deduped)
+            # Return what we found (may be less than expected for multi-page menus)
+            if len(deduped) > 0:
+                return deduped
+            
+            # Fallback: use original thumbnails
+            thumbnails.sort(key=lambda r: (r[1], r[0]))  # Top to bottom
+            logger.info("menu_images: static frame detected %d thumbnail(s): %s", len(thumbnails), thumbnails)
+            return thumbnails[:expected]
+        else:
+            logger.info("menu_images: static frame found %d dark regions but none matched thumbnail size", len(merged))
+
+    # Fallback: variance-based detection
     mask = Image.new("L", (width, height), 0)
     mask_pixels = mask.load()
     for y in range(0, height, block_size):
@@ -650,6 +780,7 @@ def run(
         raise ValidationError("menu_images requires VIDEO_TS path or reference images")
 
     fallback_rects: dict[str, list[tuple[int, int, int, int]]] = {}
+    fallback_entries: set[str] = set()  # Track entries using fallback rects
     if use_real_ffmpeg and video_ts_path:
         entries_by_menu: dict[str, list[MenuEntryModel]] = {}
         for entry in ordered_entries:
@@ -664,27 +795,86 @@ def run(
             menu_base = _menu_base_id(menu_id)
             vob_path = None
             if menu_base and menu_base.upper().startswith("VTSM"):
+                # VTSM menus are in VTS_XX_0.VOB (menu VOB), not VTS_XX_1.VOB (title VOB)
                 parts = menu_base.split("_")
                 if len(parts) >= 2 and parts[1].isdigit():
-                    vob_path = video_ts_path / f"VTS_{parts[1]}_1.VOB"
-            if vob_path is None:
-                candidates = sorted(video_ts_path.glob("VTS_*_1.VOB"))
-                vob_path = candidates[0] if candidates else None
+                    vob_path = video_ts_path / f"VTS_{parts[1]}_0.VOB"
+            elif menu_base and menu_base.upper().startswith("VMGM"):
+                # VMGM menus are in VIDEO_TS.VOB
+                vob_path = video_ts_path / "VIDEO_TS.VOB"
+            elif menu_base == "dvd_root" or menu_id == "dvd_root":
+                # "dvd_root" typically means main menu in VIDEO_TS.VOB
+                vob_path = video_ts_path / "VIDEO_TS.VOB"
+            if vob_path is None or not vob_path.is_file():
+                # Fallback: try VIDEO_TS.VOB first, then any VTS menu VOB
+                candidates = [video_ts_path / "VIDEO_TS.VOB"]
+                candidates.extend(sorted(video_ts_path.glob("VTS_*_0.VOB")))
+                for candidate in candidates:
+                    if candidate.is_file():
+                        vob_path = candidate
+                        break
             if vob_path and vob_path.is_file():
-                rects, is_static = _detect_menu_rects_from_video(
+                # Try static thumbnail detection first (more reliable for menus with thumbnails)
+                static_rects = _detect_menu_rects_from_static_frame(
                     vob_path, output_dir, expected=len(menu_entries)
                 )
-                if len(rects) < len(menu_entries):
-                    static_rects = _detect_menu_rects_from_static_frame(
+                if len(static_rects) >= len(menu_entries):
+                    rects = static_rects
+                else:
+                    # Fall back to video-based (frame differencing) detection
+                    rects, is_static = _detect_menu_rects_from_video(
                         vob_path, output_dir, expected=len(menu_entries)
                     )
                     if len(static_rects) > len(rects):
                         rects = static_rects
                 if rects:
-                    fallback_rects[menu_id] = rects
+                    logger.info(
+                        "menu_images: raw detected rects for %s: %s",
+                        menu_id,
+                        rects,
+                    )
+                    # Expand rects to include adjacent text if needed.
+                    # Sort by x position to enable overlap-aware expansion
+                    sorted_rects = sorted(rects, key=lambda r: (r[1], r[0]))  # Sort by y, then x
+                    expanded_rects = []
+                    for idx, rect in enumerate(sorted_rects):
+                        x1, y1, x2, y2 = rect
+                        w = x2 - x1 + 1
+                        h = y2 - y1 + 1
+                        # Heuristic: if rect is roughly square and < 30% of frame width,
+                        # likely a thumbnail; expand right to capture adjacent text.
+                        aspect = w / h if h > 0 else 1.0
+                        if 0.5 <= aspect <= 2.0 and w < 720 * 0.3:
+                            expansion = int(w * 2.5)
+                            max_x2 = min(719, x2 + expansion)
+                            
+                            # Check for buttons to the right on the same row (prevent overlap)
+                            for other_rect in sorted_rects[idx + 1:]:
+                                other_x1, other_y1, other_x2, other_y2 = other_rect
+                                # If on similar vertical position (same row), limit expansion
+                                if abs(other_y1 - y1) < 50:  # Same row threshold
+                                    # Leave a 10px gap to prevent overlap
+                                    max_x2 = min(max_x2, other_x1 - 10)
+                            
+                            expanded_rects.append((x1, y1, max(x2, max_x2), y2))
+                        else:
+                            expanded_rects.append(rect)
+                    logger.info(
+                        "menu_images: expanded rects for %s: %s",
+                        menu_id,
+                        expanded_rects,
+                    )
+                    # Restore original order by button index
+                    original_order_rects = []
+                    for orig_rect in rects:
+                        for exp_rect in expanded_rects:
+                            if exp_rect[0] == orig_rect[0] and exp_rect[1] == orig_rect[1]:
+                                original_order_rects.append(exp_rect)
+                                break
+                    fallback_rects[menu_id] = original_order_rects
                     logger.info(
                         "menu_images: detected %d rects from video for %s",
-                        len(rects),
+                        len(expanded_rects),
                         menu_id,
                     )
                 elif is_static:
@@ -709,6 +899,15 @@ def run(
             if 0 <= index < len(rects):
                 x1, y1, x2, y2 = rects[index]
                 crop_rect = RectModel(x=x1, y=y1, w=x2 - x1 + 1, h=y2 - y1 + 1)
+            elif len(rects) > 0:
+                # For buttons beyond detected rects (e.g., on other menu pages),
+                # use a simple fallback that won't be expanded
+                # Place it in a safe region where text might be
+                crop_rect = RectModel(x=350, y=350, w=300, h=100)
+                fallback_entries.add(entry.entry_id)
+                logger.warning(
+                    f"menu_images: {entry.entry_id} using fallback rect (multi-page menu?)"
+                )
 
         # 1. Reference images for explicit test runs (optional)
         if use_real_ffmpeg and reference_dir is not None:
@@ -727,15 +926,11 @@ def run(
                 dst.write_bytes(placeholder_png)
         elif use_real_ffmpeg and video_ts_path:
             # 3. Try real extraction from DVD VOBs
-            # Heuristic: VMGM menus are in VIDEO_TS.VOB, VTSM menus are in VTS_XX_0.VOB
+            # IMPORTANT: Extract from MENU VOB (where button image is), NOT target VOB (where button leads)
             menu_base = _menu_base_id(entry.menu_id)
             vob_path = None
-            if entry.target and entry.target.title_id and entry.target.pgc_id:
-                vob_id = pgc_vob_map.get((entry.target.title_id, entry.target.pgc_id))
-                if vob_id is not None:
-                    candidate = video_ts_path / f"VTS_{entry.target.title_id:02d}_{vob_id}.VOB"
-                    if candidate.is_file():
-                        vob_path = candidate
+            
+            # First priority: use menu_id to find the menu VOB
             if menu_base and menu_base.upper() == "VMGM":
                 vob_path = video_ts_path / "VIDEO_TS.VOB"
             elif menu_base and menu_base.upper().startswith("VTSM"):
@@ -743,11 +938,17 @@ def run(
                 parts = menu_base.split("_")
                 if len(parts) >= 2 and parts[1].isdigit():
                     vob_path = video_ts_path / f"VTS_{parts[1]}_0.VOB"
-            if vob_path is None:
+            elif menu_base == "dvd_root" or menu_id == "dvd_root":
+                # "dvd_root" typically means main menu in VIDEO_TS.VOB
+                vob_path = video_ts_path / "VIDEO_TS.VOB"
+            
+            # Fallback to VIDEO_TS.VOB or first menu VOB found
+            if vob_path is None or not vob_path.is_file():
                 fallback = video_ts_path / "VIDEO_TS.VOB"
                 if fallback.is_file():
                     vob_path = fallback
                 else:
+                    # Try VTS menu VOBs (VTS_XX_0.VOB)
                     candidates = sorted(video_ts_path.glob("VTS_*_0.VOB"))
                     if candidates:
                         vob_path = candidates[0]
@@ -755,8 +956,8 @@ def run(
             if vob_path and vob_path.is_file():
                 bg_cache_path = output_dir / f"bg_{entry.menu_id}.png"
                 if entry.menu_id not in menu_backgrounds:
-                    if not bg_cache_path.is_file():
-                        _extract_frame(vob_path, bg_cache_path)
+                    # Always extract frame (overwrite if exists to avoid stale cache)
+                    _extract_frame(vob_path, bg_cache_path)
                     menu_backgrounds[entry.menu_id] = bg_cache_path
                     menu_sizes[entry.menu_id] = _probe_image_size(bg_cache_path)
 
@@ -779,12 +980,15 @@ def run(
                             used_guidance = True
                 if not crop_rect:
                     raise ValidationError(
-                        f"Missing button rect for entry_id {entry.entry_id}"
+                        f"Missing button rect for entry_id {entry.entry_id} even after fallback"
                     )
+
                 crop_rect = _normalize_rect_to_image(crop_rect, bg_size)
+                # Skip text adjustment for fallback entries (multi-page menu buttons)
                 if (
                     use_real_ffmpeg
                     and not use_reference_guidance
+                    and entry.entry_id not in fallback_entries
                     and crop_rect.w > 100
                     and crop_rect.h < 90
                 ):
@@ -822,7 +1026,8 @@ def run(
         elif src_reference is not None and use_real_ffmpeg and not use_reference_guidance:
             shutil.copyfile(src_reference, dst)
 
-        if crop_rect is not None:
+        if crop_rect is not None and entry.entry_id not in fallback_entries:
+            # Only track non-fallback rects for overlap checking
             used_rects.setdefault(menu_id, []).append((entry.entry_id, crop_rect))
         entries.append(
             MenuImageEntry(

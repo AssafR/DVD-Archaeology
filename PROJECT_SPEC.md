@@ -87,11 +87,18 @@ Stage A: ingest
 Stage B: nav_parse
 - Input: `ingest.json`
 - Output: `nav.json`, `nav_summary.json`, `svcd_nav.json`, `vcd_nav.json`, `raw/vcd-info.stdout.txt`, `raw/vcd-info.stderr.txt` (if using vcd-info)
-- Purpose: Parse navigation structure (titles, VTS, PGC, cells) and menu domains. Uses SPU-based button detection when available, then NAV-pack parsing, with IFO-based tables as fallback. Button ordering uses a heuristic:
-  - build row-major and column-major candidate orders per menu
-  - build expected order from per-button playback targets (vob_id, first_sector)
-  - prioritize the spatial navigation direction (shorter path length)
-  - use playback-target ordering only when distances are close
+- Purpose: Parse navigation structure (titles, VTS, PGC, cells) and menu domains.
+- Button detection priority:
+  1. SPU-based (decode subpicture overlays from menu VOBs; scan 1024 sectors per VOBU)
+  2. NAV-pack BTN_IT tables (from menu VOBs: VTSM/VMGM)
+  3. NAV-pack BTN_IT tables from title VOBs (for menus embedded in title PGCs)
+  4. IFO PGCIT tables (fallback; often lack coordinates)
+- Button ordering: uses directional navigation graph when available:
+  1. Extract up/down/left/right links from NAV-pack BTN_IT entries
+  2. Validate links point to buttons in the active set
+  3. If NAV-pack links are invalid/missing, derive directional graph from spatial adjacency (nearest button in each direction)
+  4. Traverse the graph (row-major vs column-major) and choose the path that visits all buttons
+  5. Fallback: sort by playback-target position (PGC first-cell vob_id + first_sector) if graph traversal fails
 
 Stage C: menu_map
 - Input: `nav.json`
@@ -105,8 +112,8 @@ Stage D: menu_validation
 
 Stage E: timing
 - Input: `nav.json`, `ingest.json`, `menu_map.json`
-- Output: `timing.json`, `timing_meta.json`
-- Purpose: Determine precise start/end timestamps for segments.
+- Output: `timing.json`, `timing_meta.json`, updated `menu_map.json`
+- Purpose: Determine precise start/end timestamps for segments. Renumbers buttons by playback order (sorted by segment start_time) and assigns `playback_order` field to menu entries and segments. Rewrites `menu_map.json` with renumbered `entry_id` (btn1..btnN in playback order) for downstream consistency. Invalidates `menu_images` and `ocr` artifacts if renumbering occurs.
 
 Stage F: segments
 - Input: `menu_map.json`, `timing.json`
@@ -118,6 +125,7 @@ Stage G: menu_images
 - Output: `menu_images.json`, `menu_images/{button_id}.png`
 - Purpose: Extract button images from menu domains. When `--use-real-ffmpeg` is enabled, crop from the correct menu VOB and validate rectangles against the actual frame size. Optional reference images are used only when `--use-reference-images` is set; `--use-reference-guide` enables OCR/template-guided refinement. In real mode, missing/invalid rectangles are treated as errors.
 - Fallback (menus without SPU/NAV highlights): if all rectangles are missing for a menu, detect highlight regions directly from video frames by sampling multiple frames, computing frame-to-frame differences, aggregating a change mask, and extracting connected-component bounding boxes. Use these rects (sorted by size then by y/x) to populate button crops.
+- Text-adjacent expansion heuristic: for detected rects that are narrow/square (aspect ratio 0.5–2.0 and width < 30% of frame), expand the rectangle to the right by 2.5× its width to capture adjacent text labels (common in thumbnail+text menu layouts).
 
 Stage H: ocr
 - Input: `menu_images.json`
@@ -127,7 +135,7 @@ Stage H: ocr
 Stage I: extract
 - Input: `segments.json`, `ingest.json`, `menu_map.json`, `nav.json`
 - Output: `episodes/*.mkv`, `extract.json`, `logs/*.log`
-- Purpose: Extract and remux video segments using FFmpeg.
+- Purpose: Extract and remux video segments using FFmpeg. Output filenames use playback order numbering: `{input_folder}_{playback_index}.mkv` (e.g., `UglyBetty_s01b_0.mkv`, `UglyBetty_s01b_1.mkv`, ...). Processes segments in playback order (sorted by `playback_order` field). Logs playback order mapping for debugging.
 
 Stage J: verify_extract
 - Input: `segments.json`, `extract.json`
@@ -136,8 +144,10 @@ Stage J: verify_extract
 
 Stage K: finalize
 - Input: all previous outputs
-- Output: `manifest.json`
+- Output: `manifest.json`, OCR-renamed video files
 - Purpose: Merge all artifacts into a single stable manifest. Includes inputs, detected disc info, button labels, segment boundaries, output filenames, and stage statuses. Supports `--overwrite-outputs` for stable regeneration.
+- OCR-based renaming: copies extracted files to `{playback_order:02d}_{ocr_label}.mkv` format (e.g., `01_1.115.mkv`, `02_2.116.mkv`). Original playback-numbered files are preserved for tests.
+- Sync report: logs mapping of `entry_id -> output_filename -> ocr_label` for all segments in playback order.
 
 ## CLI requirements
 Implement a CLI command:
