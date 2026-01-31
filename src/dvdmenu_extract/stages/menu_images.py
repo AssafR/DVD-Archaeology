@@ -26,6 +26,11 @@ from dvdmenu_extract.util.assertx import ValidationError, assert_in_out_dir
 from dvdmenu_extract.util.fixtures import menu_buttons_dir
 from dvdmenu_extract.util.io import read_json, write_json
 from dvdmenu_extract.models.nav import NavigationModel
+from dvdmenu_extract.util.btn_it_analyzer import (
+    analyze_btn_it_structure,
+    assign_buttons_to_pages,
+    MenuPageAnalysis,
+)
 import base64
 
 
@@ -305,6 +310,293 @@ def _detect_menu_rects_from_video(
     return rects, False
 
 
+def _rects_are_similar(
+    rect1: tuple[int, int, int, int],
+    rect2: tuple[int, int, int, int],
+    position_threshold: int = 50,
+    size_threshold: float = 0.3,
+) -> bool:
+    """Check if two rectangles represent the same button (similar position and size)."""
+    x1_1, y1_1, x2_1, y2_1 = rect1
+    x1_2, y1_2, x2_2, y2_2 = rect2
+    
+    # Check center position similarity
+    cx1 = (x1_1 + x2_1) / 2
+    cy1 = (y1_1 + y2_1) / 2
+    cx2 = (x1_2 + x2_2) / 2
+    cy2 = (y1_2 + y2_2) / 2
+    
+    center_dist = ((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2) ** 0.5
+    if center_dist > position_threshold:
+        return False
+    
+    # Check size similarity
+    w1 = x2_1 - x1_1 + 1
+    h1 = y2_1 - y1_1 + 1
+    w2 = x2_2 - x1_2 + 1
+    h2 = y2_2 - y1_2 + 1
+    
+    area1 = w1 * h1
+    area2 = w2 * h2
+    
+    if area1 == 0 or area2 == 0:
+        return False
+    
+    area_ratio = min(area1, area2) / max(area1, area2)
+    if area_ratio < (1.0 - size_threshold):
+        return False
+    
+    return True
+
+
+def _detect_rects_from_image_file(
+    frame_path: Path, expected: int
+) -> list[tuple[int, int, int, int]]:
+    """
+    Detect button rectangles from a single frame image file.
+    
+    Uses the same block-based dark region detection as _detect_menu_rects_from_static_frame.
+    """
+    from PIL import Image
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    image = Image.open(frame_path).convert("L")
+    width, height = image.size
+    pixels = image.load()
+    
+    # Block-based dark region detection (same as _detect_menu_rects_from_static_frame)
+    dark_block_size = 8
+    dark_blocks = []
+    for by in range(0, height, dark_block_size):
+        for bx in range(0, width // 2, dark_block_size):  # Search left half
+            values = []
+            for y in range(by, min(by + dark_block_size, height)):
+                for x in range(bx, min(bx + dark_block_size, width)):
+                    values.append(pixels[x, y])
+            if not values:
+                continue
+            mean_val = sum(values) / len(values)
+            # Dark threshold for thumbnail content
+            if mean_val < 65:
+                dark_blocks.append((bx, by, bx + dark_block_size - 1, by + dark_block_size - 1))
+    
+    if not dark_blocks:
+        return []
+    
+    # Merge adjacent dark blocks iteratively
+    merged = []
+    used = set()
+    for idx, (x1, y1, x2, y2) in enumerate(dark_blocks):
+        if idx in used:
+            continue
+        current = [x1, y1, x2, y2]
+        changed = True
+        while changed:
+            changed = False
+            for jdx, (ox1, oy1, ox2, oy2) in enumerate(dark_blocks):
+                if jdx in used or jdx == idx:
+                    continue
+                # Strictly adjacent (within 1 block size, no gaps)
+                if (abs(ox1 - current[2]) <= dark_block_size and 
+                    not (oy2 < current[1] or oy1 > current[3])):
+                    # Horizontally adjacent
+                    current = [
+                        min(current[0], ox1),
+                        min(current[1], oy1),
+                        max(current[2], ox2),
+                        max(current[3], oy2),
+                    ]
+                    used.add(jdx)
+                    changed = True
+                elif (abs(oy1 - current[3]) <= dark_block_size and 
+                      not (ox2 < current[0] or ox1 > current[2])):
+                    # Vertically adjacent - merge with strict height limit
+                    new_height = max(current[3], oy2) - min(current[1], oy1) + 1
+                    if new_height <= 120:  # Max single thumbnail height
+                        current = [
+                            min(current[0], ox1),
+                            min(current[1], oy1),
+                            max(current[2], ox2),
+                            max(current[3], oy2),
+                        ]
+                        used.add(jdx)
+                        changed = True
+        merged.append(tuple(current))
+    
+    # Filter by thumbnail size and compactness
+    thumbnails = []
+    merged_sorted = sorted(merged, key=lambda r: (r[2]-r[0]+1) * (r[3]-r[1]+1), reverse=True)
+    
+    for rect in merged_sorted:
+        x1, y1, x2, y2 = rect
+        w = x2 - x1 + 1
+        h = y2 - y1 + 1
+        bbox_area = w * h
+        
+        # Count actual dark pixels in this bounding box
+        dark_pixel_count = 0
+        for y in range(y1, min(y2 + 1, height)):
+            for x in range(x1, min(x2 + 1, width)):
+                if pixels[x, y] < 65:  # Match the detection threshold
+                    dark_pixel_count += 1
+        
+        compactness = dark_pixel_count / bbox_area if bbox_area > 0 else 0
+        
+        # Thumbnail candidates: reasonable size, decent compactness
+        if (50 <= w <= 300 and 50 <= h <= 300 and 
+            2500 <= bbox_area <= 90000 and compactness > 0.25):
+            thumbnails.append(rect)
+    
+    if not thumbnails:
+        return []
+    
+    # Filter out edge rects
+    edge_margin = 20
+    filtered_thumbnails = [
+        rect for rect in thumbnails
+        if rect[0] > edge_margin and rect[1] > edge_margin
+    ]
+    
+    # Dedupe by vertical position
+    def _thumbnail_score(rect):
+        w = rect[2] - rect[0] + 1
+        h = rect[3] - rect[1] + 1
+        aspect = w / h if h > 0 else 0
+        aspect_score = 1.0 - abs(aspect - 1.0)
+        size_score = 1.0 if 80 <= w <= 140 and 80 <= h <= 200 else 0.5
+        return aspect_score + size_score
+    
+    deduped = []
+    for rect in sorted(filtered_thumbnails, key=_thumbnail_score, reverse=True):
+        y_center = (rect[1] + rect[3]) / 2
+        overlaps = False
+        for existing in deduped:
+            existing_y_center = (existing[1] + existing[3]) / 2
+            if abs(y_center - existing_y_center) < 100:
+                overlaps = True
+                break
+        if not overlaps:
+            deduped.append(rect)
+    
+    # Sort by vertical position
+    deduped.sort(key=lambda r: (r[1], r[0]))
+    return deduped[:expected] if deduped else []
+
+
+def _detect_menu_rects_multi_page(
+    vob_path: Path,
+    output_dir: Path,
+    expected: int,
+    sample_interval: float = 3.0,
+) -> dict[int, tuple[Path, tuple[int, int, int, int]]]:
+    """
+    Detect button rectangles across multiple menu pages by sampling frames.
+    
+    Extracts frames at regular intervals throughout the menu duration,
+    runs detection on each frame, and maps each button to its best frame.
+    
+    Args:
+        vob_path: Path to menu VOB file
+        output_dir: Directory for temporary files
+        expected: Expected number of buttons
+        sample_interval: Seconds between frame samples (default: 3.0)
+    
+    Returns:
+        dict mapping button_index (0-based) -> (frame_path, rect_tuple)
+        where rect_tuple is (x1, y1, x2, y2)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Get menu duration
+    duration = _probe_video_duration(vob_path)
+    if duration is None or duration <= 0:
+        logger.warning(f"Cannot determine duration for {vob_path}, falling back to single frame")
+        return {}
+    
+    # Calculate sample timestamps (avoid very end to skip fade-outs)
+    max_time = max(0.5, duration - 0.5)
+    timestamps = []
+    t = 0.1  # Start slightly after beginning
+    while t < max_time:
+        timestamps.append(t)
+        t += sample_interval
+    
+    if not timestamps:
+        timestamps = [0.1]
+    
+    logger.info(f"menu_images: multi-page detection: sampling {len(timestamps)} frames from {vob_path.name} "
+                f"(duration={duration:.1f}s, interval={sample_interval}s)")
+    
+    # Extract and detect on each frame
+    temp_dir = output_dir / "_menu_detect_multipage"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    frame_detections: list[tuple[Path, list[tuple[int, int, int, int]]]] = []
+    
+    for idx, ts in enumerate(timestamps):
+        frame_path = temp_dir / f"{vob_path.stem}_page_{idx:02d}_t{ts:.1f}s.png"
+        try:
+            _extract_frame_at(vob_path, frame_path, ts)
+            # Run detection on this frame
+            rects = _detect_rects_from_image_file(frame_path, expected)
+            if rects:
+                logger.info(f"  Frame {idx} (t={ts:.1f}s): detected {len(rects)} rects: {rects}")
+                frame_detections.append((frame_path, rects))
+            else:
+                logger.debug(f"  Frame {idx} (t={ts:.1f}s): no rects detected")
+        except Exception as e:
+            logger.warning(f"Failed to extract/detect frame at t={ts:.1f}s: {e}")
+            continue
+    
+    if not frame_detections:
+        logger.warning("No buttons detected in any sampled frames")
+        return {}
+    
+    # Now match buttons across frames
+    # Strategy: For each button position, find the "best" frame that has it
+    button_map: dict[int, tuple[Path, tuple[int, int, int, int]]] = {}
+    
+    # Collect all unique button positions across all frames
+    all_rects: list[tuple[Path, tuple[int, int, int, int]]] = []
+    for frame_path, rects in frame_detections:
+        for rect in rects:
+            all_rects.append((frame_path, rect))
+    
+    # Group similar rectangles (same button appearing in multiple frames)
+    used_rects = set()
+    button_idx = 0
+    
+    for frame_path, rect in all_rects:
+        if (frame_path, rect) in used_rects:
+            continue
+        
+        # Find all similar rects across all frames (same button)
+        similar_rects = [(frame_path, rect)]
+        used_rects.add((frame_path, rect))
+        
+        for other_frame, other_rect in all_rects:
+            if (other_frame, other_rect) in used_rects:
+                continue
+            # Check if this is the same button (similar position and size)
+            if _rects_are_similar(rect, other_rect, position_threshold=50, size_threshold=0.3):
+                similar_rects.append((other_frame, other_rect))
+                used_rects.add((other_frame, other_rect))
+        
+        # Pick the "best" frame for this button (highest quality/clarity)
+        # For now, just use the first occurrence
+        best_frame, best_rect = similar_rects[0]
+        button_map[button_idx] = (best_frame, best_rect)
+        logger.info(f"  Button {button_idx}: found in {len(similar_rects)} frame(s), using {best_frame.name} at {best_rect}")
+        button_idx += 1
+        
+        if button_idx >= expected:
+            break
+    
+    return button_map
+
+
 def _detect_menu_rects_from_static_frame(
     vob_path: Path,
     output_dir: Path,
@@ -370,10 +662,10 @@ def _detect_menu_rects_from_static_frame(
                         changed = True
                     elif (abs(oy1 - current[3]) <= dark_block_size and 
                           not (ox2 < current[0] or ox1 > current[2])):
-                        # Vertically adjacent - merge freely but with height limit
-                        # This lets thumbnails grow fully but prevents merging across different buttons
+                        # Vertically adjacent - merge but with strict height limit
+                        # This lets one thumbnail grow fully but prevents merging separate buttons
                         new_height = max(current[3], oy2) - min(current[1], oy1) + 1
-                        if new_height <= 180:  # Max thumbnail height
+                        if new_height <= 120:  # Max single thumbnail height (was 180, too permissive)
                             current = [
                                 min(current[0], ox1),
                                 min(current[1], oy1),
@@ -424,9 +716,20 @@ def _detect_menu_rects_from_static_frame(
             logger.info("menu_images: %d thumbnails after edge filter: %s", len(filtered_thumbnails), filtered_thumbnails)
             
             # Dedupe by vertical position (may return fewer than expected for multi-page menus)
-            # Remove vertically overlapping duplicates (keep largest)
+            # Remove vertically overlapping duplicates (keep most thumbnail-like)
+            def _thumbnail_score(rect):
+                """Score how thumbnail-like a rect is (higher = more thumbnail-like)"""
+                w = rect[2] - rect[0] + 1
+                h = rect[3] - rect[1] + 1
+                aspect = w / h if h > 0 else 0
+                area = w * h
+                # Prefer: aspect close to 1.0, size 80-140px, compact shape
+                aspect_score = 1.0 - abs(aspect - 1.0)  # 1.0 best for square
+                size_score = 1.0 if 80 <= w <= 140 and 80 <= h <= 200 else 0.5
+                return aspect_score + size_score
+            
             deduped = []
-            for rect in sorted(filtered_thumbnails, key=lambda r: (r[2]-r[0])*(r[3]-r[1]), reverse=True):
+            for rect in sorted(filtered_thumbnails, key=_thumbnail_score, reverse=True):
                 y_center = (rect[1] + rect[3]) / 2
                 overlaps = False
                 for existing in deduped:
@@ -781,6 +1084,9 @@ def run(
 
     fallback_rects: dict[str, list[tuple[int, int, int, int]]] = {}
     fallback_entries: set[str] = set()  # Track entries using fallback rects
+    button_frame_map: dict[str, dict[int, Path]] = {}  # menu_id -> button_index -> frame_path
+    btn_it_analysis: dict[str, MenuPageAnalysis] = {}  # menu_id -> BTN_IT page analysis
+    button_to_page: dict[str, dict[int, int]] = {}  # menu_id -> button_idx -> page_num
     if use_real_ffmpeg and video_ts_path:
         entries_by_menu: dict[str, list[MenuEntryModel]] = {}
         for entry in ordered_entries:
@@ -814,19 +1120,47 @@ def run(
                         vob_path = candidate
                         break
             if vob_path and vob_path.is_file():
-                # Try static thumbnail detection first (more reliable for menus with thumbnails)
-                static_rects = _detect_menu_rects_from_static_frame(
-                    vob_path, output_dir, expected=len(menu_entries)
+                # Analyze BTN_IT structure for page detection
+                page_analysis = analyze_btn_it_structure(vob_path)
+                if page_analysis:
+                    btn_it_analysis[menu_id] = page_analysis
+                    logger.info(
+                        f"menu_images: BTN_IT analysis found {page_analysis.page_count} page(s) "
+                        f"for {menu_id}"
+                    )
+                
+                # NEW: Try multi-page detection first for better page 2+ coverage
+                multipage_map = _detect_menu_rects_multi_page(
+                    vob_path, output_dir, expected=len(menu_entries), sample_interval=3.0
                 )
-                if len(static_rects) >= len(menu_entries):
-                    rects = static_rects
+                
+                rects = []
+                if multipage_map and len(multipage_map) >= len(menu_entries):
+                    # Multi-page detection succeeded! Use those results
+                    logger.info(f"menu_images: multi-page detection found {len(multipage_map)} buttons for {menu_id}")
+                    # Extract rects and store frame mappings
+                    button_frame_map[menu_id] = {}
+                    for btn_idx in sorted(multipage_map.keys()):
+                        frame_path, rect = multipage_map[btn_idx]
+                        rects.append(rect)
+                        button_frame_map[menu_id][btn_idx] = frame_path
+                        logger.info(f"    Button {btn_idx}: {rect} from {frame_path.name}")
                 else:
-                    # Fall back to video-based (frame differencing) detection
-                    rects, is_static = _detect_menu_rects_from_video(
+                    # Fallback to single-frame detection
+                    logger.info(f"menu_images: falling back to single-frame detection for {menu_id}")
+                    static_rects = _detect_menu_rects_from_static_frame(
                         vob_path, output_dir, expected=len(menu_entries)
                     )
-                    if len(static_rects) > len(rects):
+                    if len(static_rects) >= len(menu_entries):
                         rects = static_rects
+                    else:
+                        # Fall back to video-based (frame differencing) detection
+                        rects, is_static = _detect_menu_rects_from_video(
+                            vob_path, output_dir, expected=len(menu_entries)
+                        )
+                        if len(static_rects) > len(rects):
+                            rects = static_rects
+                
                 if rects:
                     logger.info(
                         "menu_images: raw detected rects for %s: %s",
@@ -834,7 +1168,10 @@ def run(
                         rects,
                     )
                     # Expand rects to include adjacent text if needed.
-                    # Sort by x position to enable overlap-aware expansion
+                    # IMPORTANT: For vertically stacked buttons (column layout):
+                    # - Buttons can expand horizontally without limit (to capture text)
+                    # - Only prevent expansion if another button is on SAME ROW
+                    # - Buttons above/below do NOT restrict horizontal expansion
                     sorted_rects = sorted(rects, key=lambda r: (r[1], r[0]))  # Sort by y, then x
                     expanded_rects = []
                     for idx, rect in enumerate(sorted_rects):
@@ -849,12 +1186,18 @@ def run(
                             max_x2 = min(719, x2 + expansion)
                             
                             # Check for buttons to the right on the same row (prevent overlap)
-                            for other_rect in sorted_rects[idx + 1:]:
+                            # Note: Buttons above/below (different rows) are ignored
+                            for other_idx, other_rect in enumerate(sorted_rects):
+                                if other_idx == idx:
+                                    continue
                                 other_x1, other_y1, other_x2, other_y2 = other_rect
+                                
                                 # If on similar vertical position (same row), limit expansion
                                 if abs(other_y1 - y1) < 50:  # Same row threshold
                                     # Leave a 10px gap to prevent overlap
                                     max_x2 = min(max_x2, other_x1 - 10)
+                                # Note: buttons stacked vertically (same x, different y)
+                                # should NOT limit each other's horizontal expansion
                             
                             expanded_rects.append((x1, y1, max(x2, max_x2), y2))
                         else:
@@ -883,6 +1226,23 @@ def run(
                         "dynamic highlight detection may be unavailable",
                         menu_id,
                     )
+    
+    # Assign buttons to pages using BTN_IT analysis
+    if btn_it_analysis:
+        logger.info("menu_images: assigning buttons to pages using BTN_IT data")
+        for menu_id, menu_entries in entries_by_menu.items():
+            if menu_id not in btn_it_analysis:
+                continue
+            
+            page_analysis = btn_it_analysis[menu_id]
+            detected_rects = fallback_rects.get(menu_id, [])
+            detected_indices = list(range(len(detected_rects)))
+            
+            button_to_page[menu_id] = assign_buttons_to_pages(
+                expected_button_count=len(menu_entries),
+                detected_button_indices=detected_indices,
+                page_analysis=page_analysis,
+            )
 
     for entry in ordered_entries:
         dst = output_dir / f"{entry.entry_id}.png"
@@ -905,8 +1265,18 @@ def run(
                 # Place it in a safe region where text might be
                 crop_rect = RectModel(x=350, y=350, w=300, h=100)
                 fallback_entries.add(entry.entry_id)
+                
+                # Check if we know which page this button is on from BTN_IT
+                page_info = ""
+                if menu_id in button_to_page:
+                    btn_idx = index
+                    if btn_idx in button_to_page[menu_id]:
+                        page_num = button_to_page[menu_id][btn_idx]
+                        total_pages = btn_it_analysis[menu_id].page_count if menu_id in btn_it_analysis else 1
+                        page_info = f" [BTN_IT: page {page_num + 1}/{total_pages}]"
+                
                 logger.warning(
-                    f"menu_images: {entry.entry_id} using fallback rect (multi-page menu?)"
+                    f"menu_images: {entry.entry_id} using fallback rect{page_info}"
                 )
 
         # 1. Reference images for explicit test runs (optional)
@@ -954,15 +1324,30 @@ def run(
                         vob_path = candidates[0]
 
             if vob_path and vob_path.is_file():
-                bg_cache_path = output_dir / f"bg_{entry.menu_id}.png"
-                if entry.menu_id not in menu_backgrounds:
-                    # Always extract frame (overwrite if exists to avoid stale cache)
-                    _extract_frame(vob_path, bg_cache_path)
-                    menu_backgrounds[entry.menu_id] = bg_cache_path
-                    menu_sizes[entry.menu_id] = _probe_image_size(bg_cache_path)
-
-                bg_path = menu_backgrounds[entry.menu_id]
-                bg_size = menu_sizes[entry.menu_id]
+                # Check if this button has a specific frame from multi-page detection
+                button_index = None
+                try:
+                    button_index = int(entry.entry_id.replace("btn", "")) - 1
+                except ValueError:
+                    pass
+                
+                if (menu_id in button_frame_map and 
+                    button_index is not None and 
+                    button_index in button_frame_map[menu_id]):
+                    # Use button-specific frame from multi-page detection
+                    bg_path = button_frame_map[menu_id][button_index]
+                    bg_size = _probe_image_size(bg_path)
+                    logger.info(f"menu_images: using multi-page frame {bg_path.name} for {entry.entry_id}")
+                else:
+                    # Use default menu background frame
+                    bg_cache_path = output_dir / f"bg_{entry.menu_id}.png"
+                    if entry.menu_id not in menu_backgrounds:
+                        # Always extract frame (overwrite if exists to avoid stale cache)
+                        _extract_frame(vob_path, bg_cache_path)
+                        menu_backgrounds[entry.menu_id] = bg_cache_path
+                        menu_sizes[entry.menu_id] = _probe_image_size(bg_cache_path)
+                    bg_path = menu_backgrounds[entry.menu_id]
+                    bg_size = menu_sizes[entry.menu_id]
                 needs_overlap_fix = menu_overlap_flags.get(menu_id, False)
                 used_guidance = False
                 if (use_reference_guidance or needs_overlap_fix) and entry.menu_id:

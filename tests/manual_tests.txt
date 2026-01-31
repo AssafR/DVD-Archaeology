@@ -24,5 +24,8 @@ uv run dvdmenu-extract "Q:\DVD\Ellen_Season_04\" --out "C:\Users\Assaf\Desktop\T
 
 uv run dvdmenu-extract "C:\Users\Assaf\program\DVD-Archaeology\DVD_Sample_01\" --out "C:\Users\Assaf\Desktop\Temporary\DVD_Sample_01" --use-real-ffmpeg  --overwrite-outputs --force 
 
+# DVD_Sample_01 - Multi-page menu test (see RESEARCH_DVD_Sample_01.md)
+# Expected: 3 videos extracted, 2 buttons detected visually, 1 fallback
+# Known issues: btn3 on page 2 uses fallback, btn2 duration mismatch
 
 
