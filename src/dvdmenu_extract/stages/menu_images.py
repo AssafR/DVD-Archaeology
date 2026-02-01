@@ -365,11 +365,11 @@ def _detect_rects_from_image_file(
     - Button-like size (80-200px wide, 60-150px tall)
     - Left side position (x < 400)
     """
-    from PIL import Image
+    from PIL import Image, ImageOps, ImageFilter
     import logging
     logger = logging.getLogger(__name__)
     
-    image = Image.open(frame_path).convert("L")
+    image = ImageOps.autocontrast(Image.open(frame_path).convert("L"))
     width, height = image.size
     pixels = image.load()
     
@@ -429,9 +429,165 @@ def _detect_rects_from_image_file(
                 dark_cores.append((x, y, x + CORE_SIZE, y + CORE_SIZE, dark_ratio))
     
     logger.info(f"  Found {len(dark_cores)} dark thumbnail cores")
-    
+
     if not dark_cores:
         logger.warning(f"  No dark cores found in {frame_path.name}")
+        # Fallback: detect wide text highlight bands (full-width rows)
+        logger.info("  Attempting wide text highlight detection...")
+        hist = image.histogram()
+        total_pixels = width * height
+        if total_pixels == 0:
+            return []
+        cumulative = 0
+        p75_value = 180
+        for idx, count in enumerate(hist):
+            cumulative += count
+            if cumulative >= total_pixels * 0.75:
+                p75_value = idx
+                break
+        bright_thresh = max(160, p75_value)
+        row_ratios: list[float] = []
+        for y in range(height):
+            bright_count = 0
+            for x in range(width):
+                if pixels[x, y] >= bright_thresh:
+                    bright_count += 1
+            row_ratios.append(bright_count / width)
+        mean_ratio = sum(row_ratios) / len(row_ratios)
+        variance = sum((r - mean_ratio) ** 2 for r in row_ratios) / len(row_ratios)
+        std_ratio = variance ** 0.5
+        ratio_threshold = max(mean_ratio + 0.5 * std_ratio, 0.005)
+        logger.info(
+            "  Text-highlight threshold: bright=%d row_ratio>=%.3f (mean=%.3f std=%.3f)",
+            bright_thresh,
+            ratio_threshold,
+            mean_ratio,
+            std_ratio,
+        )
+        highlight_rows = [idx for idx, ratio in enumerate(row_ratios) if ratio >= ratio_threshold]
+        if len(highlight_rows) < max(8, expected):
+            ranked_rows = sorted(
+                range(len(row_ratios)),
+                key=lambda idx: row_ratios[idx],
+                reverse=True,
+            )
+            top_n = min(len(ranked_rows), max(expected * 3, 20))
+            highlight_rows = sorted(ranked_rows[:top_n])
+        if not highlight_rows:
+            logger.warning("  No highlight rows detected for text buttons")
+            return []
+        bands: list[tuple[int, int]] = []
+        start = highlight_rows[0]
+        prev = highlight_rows[0]
+        for row in highlight_rows[1:]:
+            if row <= prev + 2:
+                prev = row
+                continue
+            bands.append((start, prev))
+            start = row
+            prev = row
+        bands.append((start, prev))
+        rects: list[tuple[int, int, int, int]] = []
+        for y1, y2 in bands:
+            if y2 - y1 + 1 < 10 or y2 - y1 + 1 > 80:
+                continue
+            x1 = width
+            x2 = 0
+            for y in range(y1, y2 + 1):
+                for x in range(width):
+                    if pixels[x, y] >= bright_thresh:
+                        if x < x1:
+                            x1 = x
+                        if x > x2:
+                            x2 = x
+            if x2 <= x1:
+                continue
+            band_width = x2 - x1 + 1
+            if band_width >= int(width * 0.6):
+                rects.append((0, y1, width - 1, y2))
+        rects.sort(key=lambda r: (r[1], r[0]))
+        if len(rects) < max(2, expected // 2):
+            logger.info(
+                "  Wide highlight bands below target (%d); trying edge-based rows...",
+                len(rects),
+            )
+            edges = ImageOps.autocontrast(image.filter(ImageFilter.FIND_EDGES))
+            edge_pixels = edges.load()
+            edge_hist = edges.histogram()
+            edge_total = width * height
+            edge_cum = 0
+            p70_edge = 30
+            for idx, count in enumerate(edge_hist):
+                edge_cum += count
+                if edge_cum >= edge_total * 0.70:
+                    p70_edge = idx
+                    break
+            edge_thresh = max(30, p70_edge)
+            edge_ratios: list[float] = []
+            for y in range(height):
+                edge_count = 0
+                for x in range(width):
+                    if edge_pixels[x, y] >= edge_thresh:
+                        edge_count += 1
+                edge_ratios.append(edge_count / width)
+            edge_mean = sum(edge_ratios) / len(edge_ratios)
+            edge_var = sum((r - edge_mean) ** 2 for r in edge_ratios) / len(edge_ratios)
+            edge_std = edge_var ** 0.5
+            edge_ratio_threshold = max(edge_mean + 0.5 * edge_std, 0.005)
+            logger.info(
+                "  Edge threshold: edge=%d row_ratio>=%.3f (mean=%.3f std=%.3f)",
+                edge_thresh,
+                edge_ratio_threshold,
+                edge_mean,
+                edge_std,
+            )
+            edge_rows = [idx for idx, ratio in enumerate(edge_ratios) if ratio >= edge_ratio_threshold]
+            if len(edge_rows) < max(8, expected):
+                edge_ranked = sorted(
+                    range(len(edge_ratios)),
+                    key=lambda idx: edge_ratios[idx],
+                    reverse=True,
+                )
+                top_n = min(len(edge_ranked), max(expected * 3, 20))
+                edge_rows = sorted(edge_ranked[:top_n])
+            if edge_rows:
+                edge_bands: list[tuple[int, int]] = []
+                start = edge_rows[0]
+                prev = edge_rows[0]
+                for row in edge_rows[1:]:
+                    if row <= prev + 2:
+                        prev = row
+                        continue
+                    edge_bands.append((start, prev))
+                    start = row
+                    prev = row
+                edge_bands.append((start, prev))
+                edge_rects: list[tuple[int, int, int, int]] = []
+                for y1, y2 in edge_bands:
+                    if y2 - y1 + 1 < 8 or y2 - y1 + 1 > 60:
+                        continue
+                    x1 = width
+                    x2 = 0
+                    for y in range(y1, y2 + 1):
+                        for x in range(width):
+                            if edge_pixels[x, y] >= edge_thresh:
+                                if x < x1:
+                                    x1 = x
+                                if x > x2:
+                                    x2 = x
+                    if x2 <= x1:
+                        continue
+                    band_width = x2 - x1 + 1
+                    if band_width >= int(width * 0.5):
+                        edge_rects.append((0, y1, width - 1, y2))
+                edge_rects.sort(key=lambda r: (r[1], r[0]))
+                if edge_rects:
+                    logger.info("  Edge-based detection found %d bands", len(edge_rects))
+                    rects = edge_rects
+        if rects:
+            logger.info("  Wide text highlight detection found %d bands", len(rects))
+            return rects[:expected]
+        logger.warning("  No wide highlight bands matched criteria")
         return []
     
     # Expand each core to full button size
@@ -615,7 +771,11 @@ def _extract_spu_button_rects(
     """
     import logging
     from dvdmenu_extract.util.libdvdread_compat import read_u16
-    from dvdmenu_extract.util.libdvdread_spu import decode_spu_bitmap, bitmap_connected_components
+    from dvdmenu_extract.util.libdvdread_spu import (
+        decode_spu_bitmap,
+        bitmap_connected_components,
+        find_spu_text_band_rects,
+    )
     logger = logging.getLogger(__name__)
     
     logger.info(f"menu_images: Extracting SPU overlays from {vob_path.name}")
@@ -794,6 +954,16 @@ def _extract_spu_button_rects(
             else:
                 logger.info(f"        -> Too small, likely navigation element")
         
+        if not page_rects:
+            text_rects = find_spu_text_band_rects(bitmap)
+            if text_rects:
+                logger.info(
+                    "    SPU text-band detection found %d band(s) for page %d",
+                    len(text_rects),
+                    page_index,
+                )
+                page_rects = text_rects
+
         if page_rects:
             # Sort buttons on this page by vertical position (top to bottom, left to right)
             page_rects.sort(key=lambda r: (r[1], r[0]))
@@ -961,7 +1131,7 @@ def _detect_menu_rects_multi_page(
         # Comparing frames from different pages detects background differences, not highlights!
         logger.info(f"  Separating frames by menu page to avoid false positives...")
         
-        from PIL import ImageChops, ImageStat
+        from PIL import Image, ImageChops, ImageStat
         
         # Simple heuristic: Split frames into groups based on visual similarity
         # Frames from the same page should be very similar (only highlight moves)
@@ -2131,22 +2301,24 @@ def run(
                     and crop_rect.w > 100
                     and crop_rect.h < 90
                 ):
+                    is_full_width = crop_rect.w >= int(bg_size[0] * 0.9)
                     rect_center_x = crop_rect.x + (crop_rect.w / 2)
-                    if rect_center_x > (bg_size[0] * 0.45):
+                    if rect_center_x > (bg_size[0] * 0.45) and not is_full_width:
                         crop_rect = _adjust_rect_for_text(
                             crop_rect, 0.88, 0.0, 0.0, left_shift=-8
                         )
                     else:
-                        if crop_rect.y > 200:
+                        if crop_rect.y > 200 and not is_full_width:
                             crop_rect = _adjust_rect_for_text(
                                 crop_rect, 0.88, 0.2, 0.05
                             )
-                        else:
+                        elif not is_full_width:
                             crop_rect = _adjust_rect_for_text(
                                 crop_rect, 0.88, 0.35, 0.1
                             )
                 if use_reference_guidance and crop_rect.w > 100 and crop_rect.h > 50:
-                    crop_rect = _shrink_rect(crop_rect, 0.85)
+                    if crop_rect.w < int(bg_size[0] * 0.9):
+                        crop_rect = _shrink_rect(crop_rect, 0.85)
                 if (
                     crop_rect.x + crop_rect.w > bg_size[0]
                     or crop_rect.y + crop_rect.h > bg_size[1]

@@ -279,6 +279,182 @@ def find_spu_button_rects(packet: bytes) -> list[tuple[int, int, int, int]]:
     return [rect for rect in rects if rect[2] > rect[0] and rect[3] > rect[1]]
 
 
+def find_spu_text_band_rects(bitmap: SpuBitmap) -> list[tuple[int, int, int, int]]:
+    """Detect full-width text highlight bands from SPU bitmap rows."""
+    if bitmap.width <= 0 or bitmap.height <= 0:
+        return []
+    row_ratios: list[float] = []
+    for row in bitmap.pixels:
+        if not row:
+            row_ratios.append(0.0)
+            continue
+        non_zero = sum(1 for px in row if px != 0)
+        row_ratios.append(non_zero / len(row))
+    mean_ratio = sum(row_ratios) / len(row_ratios)
+    variance = sum((r - mean_ratio) ** 2 for r in row_ratios) / len(row_ratios)
+    std_ratio = variance ** 0.5
+    threshold = max(mean_ratio + 1.0 * std_ratio, 0.01)
+    highlight_rows = [idx for idx, ratio in enumerate(row_ratios) if ratio >= threshold]
+    if len(highlight_rows) < 8:
+        threshold = max(mean_ratio + 0.5 * std_ratio, 0.005)
+        highlight_rows = [idx for idx, ratio in enumerate(row_ratios) if ratio >= threshold]
+    if not highlight_rows:
+        return []
+    bands: list[tuple[int, int]] = []
+    start = highlight_rows[0]
+    prev = highlight_rows[0]
+    for row in highlight_rows[1:]:
+        if row <= prev + 2:
+            prev = row
+            continue
+        bands.append((start, prev))
+        start = row
+        prev = row
+    bands.append((start, prev))
+    candidates: list[tuple[int, int, int, int, float]] = []
+    bottom_margin = max(24, int(bitmap.height * 0.08))
+    top_margin = max(8, int(bitmap.height * 0.04))
+    for y1, y2 in bands:
+        band_height = y2 - y1 + 1
+        if band_height < 6 or band_height > 120:
+            continue
+        if y1 <= top_margin or y2 >= (bitmap.height - bottom_margin):
+            # Skip navigation bars (top/bottom overlays)
+            continue
+        # Measure horizontal coverage for the band (skip narrow UI widgets)
+        min_x = bitmap.width
+        max_x = 0
+        for yy in range(y1, y2 + 1):
+            row = bitmap.pixels[yy]
+            for xx, px in enumerate(row):
+                if px != 0:
+                    if xx < min_x:
+                        min_x = xx
+                    if xx > max_x:
+                        max_x = xx
+        if max_x <= min_x:
+            continue
+        span_ratio = (max_x - min_x + 1) / bitmap.width
+        # Expand vertically to capture full text line height (bias downward).
+        pad_up = max(3, int(band_height * 0.4))
+        pad_down = max(6, int(band_height * 1.0))
+        y1 = max(0, y1 - pad_up)
+        y2 = min(bitmap.height - 1, y2 + pad_down)
+        # Avoid pulling in top navigation/arrow strip after padding.
+        y1 = max(y1, top_margin)
+        candidates.append((y1, y2, min_x, max_x, span_ratio))
+
+    rects: list[tuple[int, int, int, int]] = []
+    heights = [y2 - y1 + 1 for y1, y2, _, _, _ in candidates]
+    median_height = sorted(heights)[len(heights) // 2] if heights else 0
+    span_threshold = 0.6
+    for y1, y2, min_x, max_x, span_ratio in candidates:
+        if span_ratio < span_threshold:
+            continue
+        if median_height and (y2 - y1 + 1) > int(median_height * 2.0):
+            continue
+        left_pad = 8
+        rects.append(
+            (
+                bitmap.x + max(0, min_x - left_pad),
+                bitmap.y + y1,
+                bitmap.x + bitmap.width - 1,
+                bitmap.y + y2,
+            )
+        )
+    if len(rects) < 10:
+        rects = []
+        span_threshold = 0.4
+        for y1, y2, min_x, max_x, span_ratio in candidates:
+            if span_ratio < span_threshold:
+                continue
+            if median_height and (y2 - y1 + 1) > int(median_height * 2.0):
+                continue
+            left_pad = 8
+            rects.append(
+                (
+                    bitmap.x + max(0, min_x - left_pad),
+                    bitmap.y + y1,
+                    bitmap.x + bitmap.width - 1,
+                    bitmap.y + y2,
+                )
+            )
+    # Heuristic: fill missing bands when spacing suggests gaps.
+    if len(rects) >= 7 and len(rects) < 10:
+        rects = sorted(rects, key=lambda r: (r[1], r[0]))
+        centers = [((r[1] + r[3]) / 2.0) for r in rects]
+        gaps = [centers[i + 1] - centers[i] for i in range(len(centers) - 1)]
+        if gaps:
+            median_gap = sorted(gaps)[len(gaps) // 2]
+            heights = [r[3] - r[1] + 1 for r in rects]
+            median_h = sorted(heights)[len(heights) // 2]
+            x1_vals = [r[0] for r in rects]
+            x2_vals = [r[2] for r in rects]
+            med_x1 = sorted(x1_vals)[len(x1_vals) // 2]
+            med_x2 = sorted(x2_vals)[len(x2_vals) // 2]
+            inserts: list[tuple[int, int, int, int]] = []
+            for idx, gap in enumerate(gaps):
+                if gap > median_gap * 1.5:
+                    center_y = int((centers[idx] + centers[idx + 1]) / 2.0)
+                    half_h = max(8, int(median_h / 2))
+                    y1 = max(bitmap.y, center_y - half_h)
+                    y2 = min(bitmap.y + bitmap.height - 1, center_y + half_h)
+                    inserts.append((med_x1, y1, med_x2, y2))
+            # Extrapolate a missing band above/below if spacing suggests one.
+            if centers:
+                first_center = centers[0]
+                last_center = centers[-1]
+                top_limit = bitmap.y + top_margin
+                bottom_limit = bitmap.y + bitmap.height - bottom_margin
+                if (first_center - top_limit) > median_gap * 1.4:
+                    center_y = int(first_center - median_gap)
+                    half_h = max(8, int(median_h / 2))
+                    y1 = max(bitmap.y, center_y - half_h)
+                    y2 = min(bitmap.y + bitmap.height - 1, center_y + half_h)
+                    if y2 < bottom_limit:
+                        inserts.append((med_x1, y1, med_x2, y2))
+                if (bottom_limit - last_center) > median_gap * 1.4:
+                    center_y = int(last_center + median_gap)
+                    half_h = max(8, int(median_h / 2))
+                    y1 = max(bitmap.y, center_y - half_h)
+                    y2 = min(bitmap.y + bitmap.height - 1, center_y + half_h)
+                    if y1 > top_limit:
+                        inserts.append((med_x1, y1, med_x2, y2))
+            if inserts:
+                rects.extend(inserts)
+                rects = sorted(rects, key=lambda r: (r[1], r[0]))
+    # Normalize heights to median so buttons are consistent.
+    if rects:
+        heights = [r[3] - r[1] + 1 for r in rects]
+        median_h = sorted(heights)[len(heights) // 2]
+        normalized: list[tuple[int, int, int, int]] = []
+        for x1, y1, x2, y2 in rects:
+            center_y = (y1 + y2) / 2.0
+            half_h = max(1, int(median_h / 2))
+            new_y1 = int(round(center_y - half_h))
+            new_y2 = new_y1 + median_h - 1
+            min_y = top_margin
+            max_y = bitmap.height - 1 - bottom_margin
+            if new_y2 > max_y:
+                shift = new_y2 - max_y
+                new_y1 -= shift
+                new_y2 -= shift
+            if new_y1 < min_y:
+                shift = min_y - new_y1
+                new_y1 += shift
+                new_y2 += shift
+            # Small upward bias to avoid trimming top pixels.
+            new_y1 = max(min_y, new_y1 - 2)
+            new_y2 = min(max_y, new_y2 + 0)
+            new_y1 = max(min_y, new_y1)
+            new_y2 = min(max_y, new_y2)
+            if new_y2 <= new_y1:
+                continue
+            normalized.append((x1, new_y1, bitmap.x + bitmap.width - 1, new_y2))
+        rects = normalized
+    return rects
+
+
 def iter_spu_packets(ps_data: bytes) -> Iterable[tuple[int, bytes]]:
     start_code = b"\x00\x00\x01"
     offset = 0

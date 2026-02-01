@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from typing import Iterable
+import time
 import logging
 
 from dvdmenu_extract.util.assertx import ValidationError
@@ -225,7 +226,7 @@ def _parse_vtsm_navpack_buttons(
 
     c_adt = parse_vtsm_c_adt(ifo_path)
     vobu_admap = parse_vts_vobu_admap(ifo_path, 0x00DC)
-    vob_map = _build_vob_sector_map(video_ts, title_id)
+    vob_map = _build_menu_vob_sector_map(video_ts, title_id)
     if not vob_map:
         return []
 
@@ -466,7 +467,7 @@ def _parse_vtsm_spu_buttons(
 
     c_adt = parse_vtsm_c_adt(ifo_path)
     vobu_admap = parse_vts_vobu_admap(ifo_path, 0x00DC)
-    vob_map = _build_vob_sector_map(video_ts, title_id)
+    vob_map = _build_menu_vob_sector_map(video_ts, title_id)
     if not vob_map:
         return []
 
@@ -676,6 +677,27 @@ def _build_vob_sector_map(
     return mappings
 
 
+def _build_menu_vob_sector_map(
+    video_ts: Path, title_id: int
+) -> list[tuple[Path, int, int]]:
+    """Prefer the menu VOB (VTS_XX_0.VOB) to avoid scanning program VOBs."""
+    sector_size = 2048
+    mappings: list[tuple[Path, int, int]] = []
+    current_sector = 0
+    menu_vobs = sorted(video_ts.glob(f"VTS_{title_id:02d}_0.VOB"))
+    for path in menu_vobs:
+        sector_count = path.stat().st_size // sector_size
+        if sector_count == 0:
+            continue
+        start = current_sector
+        end = current_sector + sector_count - 1
+        mappings.append((path, start, end))
+        current_sector += sector_count
+    if mappings:
+        return mappings
+    return _build_vob_sector_map(video_ts, title_id)
+
+
 def _read_vob_sector_at(
     vob_map: list[tuple[Path, int, int]], sector: int
 ) -> bytes | None:
@@ -723,9 +745,35 @@ def _scan_navpacks_for_buttons(
     candidates = [sector for sector in vobu_admap if first_sector <= sector <= last_sector]
     if not candidates:
         candidates = list(range(first_sector, min(last_sector, first_sector + 8000) + 1))
+    max_candidates = 1200
+    if len(candidates) > max_candidates:
+        step = max(1, len(candidates) // max_candidates)
+        candidates = candidates[::step][:max_candidates]
+        logging.getLogger(__name__).info(
+            "nav_parse: navpack scan capped to %d samples (stride=%d)",
+            len(candidates),
+            step,
+        )
 
     best_rects: list[tuple[int, int, int, int]] = []
-    for sector in candidates:
+    deadline = time.monotonic() + 12.0
+    total = len(candidates)
+    for idx, sector in enumerate(candidates, start=1):
+        if time.monotonic() >= deadline:
+            logging.getLogger(__name__).warning(
+                "nav_parse: navpack scan timed out after %.1fs",
+                12.0,
+            )
+            break
+        if idx == 1 or idx % 200 == 0 or idx == total:
+            progress = (idx / total) * 100 if total else 100.0
+            logging.getLogger(__name__).info(
+                "nav_parse: navpack scan progress %d/%d (%.0f%%, best_rects=%d)",
+                idx,
+                total,
+                progress,
+                len(best_rects),
+            )
         nav_pack = _read_vob_sector_at(vob_map, sector)
         if not nav_pack:
             continue
@@ -746,10 +794,36 @@ def _scan_spu_for_buttons(
     candidates = [sector for sector in vobu_admap if first_sector <= sector <= last_sector]
     if not candidates:
         candidates = list(range(first_sector, min(last_sector, first_sector + 8000) + 1))
+    max_candidates = 600
+    if len(candidates) > max_candidates:
+        step = max(1, len(candidates) // max_candidates)
+        candidates = candidates[::step][:max_candidates]
+        logging.getLogger(__name__).info(
+            "nav_parse: SPU scan capped to %d samples (stride=%d)",
+            len(candidates),
+            step,
+        )
 
     best_rects: list[tuple[int, int, int, int]] = []
     best_nav_buttons: NavPackButtons | None = None
-    for sector in candidates:
+    deadline = time.monotonic() + 15.0
+    total = len(candidates)
+    for idx, sector in enumerate(candidates, start=1):
+        if time.monotonic() >= deadline:
+            logging.getLogger(__name__).warning(
+                "nav_parse: SPU scan timed out after %.1fs",
+                15.0,
+            )
+            break
+        if idx == 1 or idx % 150 == 0 or idx == total:
+            progress = (idx / total) * 100 if total else 100.0
+            logging.getLogger(__name__).info(
+                "nav_parse: SPU scan progress %d/%d (%.0f%%, best_rects=%d)",
+                idx,
+                total,
+                progress,
+                len(best_rects),
+            )
         data = _read_vob_sectors(vob_map, sector, 1024)
         if not data:
             continue

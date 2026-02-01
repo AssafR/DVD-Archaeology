@@ -9,6 +9,7 @@ used only for labeling and should not affect segmentation.
 from pathlib import Path
 from typing import Optional
 import logging
+import re
 
 from dvdmenu_extract.models.menu import MenuImagesModel
 from dvdmenu_extract.models.ocr import OcrEntryModel, OcrModel
@@ -75,6 +76,7 @@ def _run_stub(
             spu_text_nonempty = raw_text != ""
             background_attempted = not spu_text_nonempty
             source = "spu" if spu_text_nonempty else "background"
+        raw_text = _cleanup_ocr_text(raw_text)
         logging.info("OCR Result: %s", raw_text)
         cleaned = (
             sanitize_filename(raw_text)
@@ -98,7 +100,7 @@ def _run_stub(
 def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
     try:
         import pytesseract
-        from PIL import Image, ImageOps
+        from PIL import Image, ImageOps, ImageFilter, ImageStat
     except Exception as exc:  # pragma: no cover - depends on external env
         raise ValidationError(
             "Real OCR requested but pytesseract/Pillow not available"
@@ -128,17 +130,20 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
 
         # Load image and perform OCR
         img = Image.open(image_path)
-        
-        # Basic preprocessing: grayscale + contrast + binarize
-        img = ImageOps.autocontrast(img.convert("L"))
-        img = img.point(lambda p: 255 if p > 140 else 0)
-        
+
+        # Preprocessing for menu text: upscale + contrast + sharpen + binarize
+        img = img.convert("L")
+        img = img.resize((img.width * 2, img.height * 2), Image.BICUBIC)
+        img = ImageOps.autocontrast(img)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=180, threshold=2))
+        mean = ImageStat.Stat(img).mean[0]
+        threshold = max(120, min(200, mean + 20))
+        img = img.point(lambda p: 255 if p > threshold else 0)
+
         # Tesseract config:
         # --psm 7: Treat the image as a single text line.
-        # --psm 6: Assume a single uniform block of text.
-        # Restrict to digits/dot to reduce confusions.
-        whitelist = "-c tessedit_char_whitelist=0123456789.aA"
-        config = f"--psm 7 {whitelist}"
+        # Preserve spaces so date spacing survives.
+        config = "--psm 7 -c preserve_interword_spaces=1"
         
         raw_text = pytesseract.image_to_string(
             img, lang=ocr_lang, config=config
@@ -146,10 +151,11 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         
         # If empty with psm 7, try psm 6
         if not raw_text:
-            config = f"--psm 6 {whitelist}"
+            config = "--psm 6 -c preserve_interword_spaces=1"
             raw_text = pytesseract.image_to_string(
                 img, lang=ocr_lang, config=config
             ).strip()
+        raw_text = _cleanup_ocr_text(raw_text)
         logging.info("OCR Result: %s", raw_text)
 
         spu_text_nonempty = False
@@ -191,3 +197,37 @@ def run(
     write_json(out_dir / "ocr.json", model)
     logging.info("Finished OCR stage")
     return model
+
+
+def _cleanup_ocr_text(text: str) -> str:
+    """Normalize OCR output by restoring common missing spaces."""
+    if not text:
+        return text
+    cleaned = text.replace("\t", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"(\d)([A-Za-z])", r"\1 \2", cleaned)
+    cleaned = re.sub(r"([A-Za-z])(\d)", r"\1 \2", cleaned)
+    # Collapse spaced month abbreviations (e.g., "O ct" -> "Oct").
+    month_fixes = {
+        r"\bJ\s*a\s*n\b": "Jan",
+        r"\bF\s*e\s*b\b": "Feb",
+        r"\bM\s*a\s*r\b": "Mar",
+        r"\bA\s*p\s*r\b": "Apr",
+        r"\bM\s*a\s*y\b": "May",
+        r"\bJ\s*u\s*n\b": "Jun",
+        r"\bJ\s*u\s*l\b": "Jul",
+        r"\bA\s*u\s*g\b": "Aug",
+        r"\bS\s*e\s*p\b": "Sep",
+        r"\bO\s*c\s*t\b": "Oct",
+        r"\bO\s*0\s*c\s*t\b": "Oct",
+        r"\bN\s*o\s*v\b": "Nov",
+        r"\bD\s*e\s*c\b": "Dec",
+    }
+    for pattern, replacement in month_fixes.items():
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    # Join common code patterns like "C 366" -> "C366".
+    cleaned = re.sub(r"\b([A-Za-z])\s+(\d{2,4})\b", r"\1\2", cleaned)
+    # Replace slashes used between day/month (e.g., "2/Nov" -> "2 Nov").
+    cleaned = re.sub(r"\b(\d{1,2})\s*/\s*([A-Za-z]{3})\b", r"\1 \2", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned

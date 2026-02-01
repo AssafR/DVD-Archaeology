@@ -1,0 +1,67 @@
+{
+  "disc_name": "Ellen Season 04",
+  "disc_path": "Q:\\DVD\\Ellen_Season_04\\",
+  "description": "OCR regression test for Ellen Season 4 DVD menu buttons. Expected results from manual inspection of menu screens.",
+  "expected_results": [
+    {
+      "entry_id": "btn1",
+      "raw_text": "65. 4-3 C366 2 Oct 96 Splitsville, Man"
+    },
+    {
+      "entry_id": "btn2",
+      "raw_text": "66. 4-4 C368 16 Oct 96 The Parent Trap"
+    },
+    {
+      "entry_id": "btn3",
+      "raw_text": "67. 4-5 C367 23 Oct 96 Looking Out for Number One"
+    },
+    {
+      "entry_id": "btn4",
+      "raw_text": "68. 4-6 C369 30 Oct 96 The Bubble Gum Incident"
+    },
+    {
+      "entry_id": "btn5",
+      "raw_text": "69. 4-7 C370 6 Nov 96 Harold and Ellen"
+    },
+    {
+      "entry_id": "btn6",
+      "raw_text": "70. 4-8 C372 13 Nov 96 Not So Great Expectations"
+    },
+    {
+      "entry_id": "btn7",
+      "raw_text": "71. 4-9 C371 20 Nov 96 The Pregnancy Test"
+    },
+    {
+      "entry_id": "btn8",
+      "raw_text": "72. 4-10 C373 27 Nov 96 Kiss My Bum"
+    },
+    {
+      "entry_id": "btn9",
+      "raw_text": "73. 4-11 C374 4 Dec 96 Bowl, Baby, Bowl"
+    },
+    {
+      "entry_id": "btn10",
+      "raw_text": "74. 4-12 C375 18 Dec 96 Fleas Navidad"
+    },
+    {
+      "entry_id": "btn11",
+      "raw_text": "75. 4-13 C376 8 Jan 97 Alone Again... Naturally"
+    },
+    {
+      "entry_id": "btn12",
+      "raw_text": "76. 4-14 C377 15 Jan 97 Joe's Kept Secret"
+    },
+    {
+      "entry_id": "btn13",
+      "raw_text": "77. 4-15 C378 22 Jan 97 Makin' Whoopie"
+    },
+    {
+      "entry_id": "btn14",
+      "raw_text": "78. 4-16 C379 5 Feb 97 Ellen Unplugged"
+    },
+    {
+      "entry_id": "btn15",
+      "raw_text": "79. 4-17 C380 12 Feb 97 Ellen's Deaf Comedy Jam"
+    }
+  ]
+}
