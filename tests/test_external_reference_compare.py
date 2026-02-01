@@ -44,18 +44,19 @@ def _probe_video_stats(path: Path) -> tuple[float, float, int]:
     if cached is not None:
         return cached
     if _PROBE_VERBOSE:
-        print(f"  Starting probe: {path}")
+        print(f"  Starting probe: {path}", flush=True)
     if _FAST_FRAME_COUNT:
         fast = _probe_video_stats_fast(path)
         if fast is not None:
             if _PROBE_VERBOSE:
-                print(f"  Ending probe (fast): {path}")
+                print(f"  Ending probe (fast): {path}", flush=True)
             if _PROBE_VERBOSE and _VALIDATE_FAST_FRAME_COUNT:
                 slow = _probe_video_stats_slow(path)
                 if slow is not None and slow[2] != fast[2]:
                     print(
                         f"  Probe mismatch: fast_frames={fast[2]} slow_frames={slow[2]} "
-                        f"for {path}"
+                        f"for {path}",
+                        flush=True
                     )
                 if slow is not None:
                     _PROBE_CACHE[path] = slow
@@ -67,7 +68,7 @@ def _probe_video_stats(path: Path) -> tuple[float, float, int]:
         raise AssertionError(f"ffprobe failed for {path}")
     _PROBE_CACHE[path] = slow
     if _PROBE_VERBOSE:
-        print(f"  Ending probe: {path}")
+        print(f"  Ending probe: {path}", flush=True)
     return slow
 
 
@@ -320,7 +321,7 @@ def test_reference_output_matches_samples(tmp_path: Path, request) -> None:
     _PROBE_VERBOSE = verbose
     def vprint(message: str) -> None:
         if verbose:
-            print(message)
+            print(message, flush=True)
     used_ssim_any = False
     for output_path, ref in zip(output_files, reference_files, strict=False):
         assert output_path.is_file()

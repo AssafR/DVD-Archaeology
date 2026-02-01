@@ -20,6 +20,12 @@ uv run dvdmenu-extract "Q:\DVDs\UglyBetty_s01b" --out "C:\Users\Assaf\Desktop\Te
 
 
 uv run dvdmenu-extract "Q:\DVD\Ellen_Season_04\" --out "C:\Users\Assaf\Desktop\Temporary\Ellen_Season_04" --use-real-ffmpeg  --overwrite-outputs --force 
+# uv run dvdmenu-extract "Q:\DVD\Ellen_Season_04\" --out "C:\Users\Assaf\Desktop\Temporary\Ellen_Season_04" --use-real-ffmpeg  --overwrite-outputs --force 
+# Stress test notes (Ellen_Season_04):
+# - Two menu pages: page 1 has 10 episodes, page 2 has 5.
+# - Highlight is on text (no image highlight); verify selection detection.
+# - Menu is very wide with lots of text; OCR should capture text.
+# - Filenames should be sanitized/truncated if OCR text is long.
 
 
 uv run dvdmenu-extract "C:\Users\Assaf\program\DVD-Archaeology\DVD_Sample_01\" --out "C:\Users\Assaf\Desktop\Temporary\DVD_Sample_01" --use-real-ffmpeg  --overwrite-outputs --force 
@@ -29,3 +35,9 @@ uv run dvdmenu-extract "C:\Users\Assaf\program\DVD-Archaeology\DVD_Sample_01\" -
 # Known issues: btn3 on page 2 uses fallback, btn2 duration mismatch
 
 
+
+
+# Regression test for button extraction on DVD_Sample_01 :
+uv run pytest tests/test_dvd_sample_01_regression.py::test_dvd_sample_01_button_extraction -v
+#Run the full pipeline test:
+uv run pytest tests/test_dvd_sample_01_regression.py -v -s

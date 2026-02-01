@@ -22,7 +22,11 @@ def main(
     ocr_lang: str = typer.Option("eng+heb", "--ocr-lang"),
     use_stub_ocr: bool = typer.Option(False, "--use-stub-ocr"),
     use_real_ffmpeg: bool = typer.Option(False, "--use-real-ffmpeg"),
-    repair: str = typer.Option("off", "--repair"),
+    repair: str = typer.Option(
+        "off",
+        "--repair",
+        help="Error resilience mode: off (no repair), safe (moderate error handling), aggressive (maximum resilience, may be slow)",
+    ),
     stage: Optional[str] = typer.Option(None, "--stage"),
     until: Optional[str] = typer.Option(None, "--until"),
     from_stage: Optional[str] = typer.Option(None, "--from"),

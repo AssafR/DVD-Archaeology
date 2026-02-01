@@ -4,10 +4,13 @@ import re
 from pathlib import Path
 
 
-def sanitize_filename(label: str) -> str:
+def sanitize_filename(label: str, max_length: int = 120) -> str:
     cleaned = re.sub(r"[<>:\"/\\\\|?*]+", "", label)
+    cleaned = re.sub(r"[\x00-\x1f]+", "", cleaned)
     cleaned = re.sub(r"\s+", "_", cleaned.strip())
     cleaned = cleaned.strip("._")
+    if max_length > 0 and len(cleaned) > max_length:
+        cleaned = cleaned[:max_length].rstrip("._")
     return cleaned or "untitled"
 
 

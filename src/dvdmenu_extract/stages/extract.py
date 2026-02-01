@@ -219,6 +219,56 @@ def _run_ffmpeg_command(command: list[str], log_messages: list[str]) -> subproce
     return completed
 
 
+def _build_ffmpeg_input_flags(repair: str) -> list[str]:
+    """Build ffmpeg input flags based on repair mode.
+    
+    Args:
+        repair: Repair mode - "off", "safe", or "aggressive"
+        
+    Returns:
+        List of ffmpeg flags for input handling and error resilience
+    """
+    # Base flags for all modes
+    fflags = "+genpts"
+    
+    if repair == "aggressive":
+        # Combine fflags: +genpts+discardcorrupt
+        # Note: +discardcorrupt can cause hangs but helps with corrupted packets
+        fflags = "+genpts+discardcorrupt"
+    
+    flags = [
+        "-fflags", fflags,
+        "-err_detect", "ignore_err",
+        "-probesize", "100M",
+        "-analyzeduration", "100M",
+        "-ignore_unknown",
+        "-copy_unknown",
+    ]
+    
+    if repair in ("safe", "aggressive"):
+        # Add error resilience for damaged DVDs
+        flags.extend([
+            "-max_muxing_queue_size", "9999",
+            "-max_error_rate", "1.0",
+        ])
+    
+    return flags
+
+
+def _build_ffmpeg_output_flags() -> list[str]:
+    """Build ffmpeg output flags for DVD extraction."""
+    return [
+        "-map", "0:v",  # Map all video streams
+        "-map", "0:a",  # Map all audio streams  
+        "-map", "0:s?",  # Map all subtitle streams (optional, may not exist)
+        "-map_metadata", "0",
+        "-map_chapters", "0",
+        "-c", "copy",
+        "-start_at_zero",
+        "-max_interleave_delta", "0",
+    ]
+
+
 def run(
     segments_path: Path,
     ingest_path: Path,
@@ -227,8 +277,8 @@ def run(
     use_real_ffmpeg: bool,
     repair: str,
 ) -> ExtractModel:
-    if repair not in {"off", "safe"}:
-        raise ValidationError("repair must be one of: off, safe")
+    if repair not in {"off", "safe", "aggressive"}:
+        raise ValidationError("repair must be one of: off, safe, aggressive")
 
     segments = read_json(segments_path, SegmentsModel)
     ingest = read_json(ingest_path, IngestModel)
@@ -394,36 +444,16 @@ def run(
                     "ffmpeg",
                     "-hide_banner",
                     "-y",
-                    "-fflags",
-                    "+genpts",
-                    "-err_detect",
-                    "ignore_err",
-                    "-probesize",
-                    "100M",
-                    "-analyzeduration",
-                    "100M",
-                    "-ignore_unknown",
-                    "-copy_unknown",
+                    *_build_ffmpeg_input_flags(repair),
                     "-avoid_negative_ts",
                     "make_zero",
                     "-i",
                     str(temp_path),
-                    "-map",
-                    "0:v:0",
-                    "-map",
-                    "0:a?",
-                    "-map_metadata",
-                    "0",
-                    "-map_chapters",
-                    "0",
-                    "-c",
-                    "copy",
-                    "-start_at_zero",
-                    "-max_interleave_delta",
-                    "0",
+                    *_build_ffmpeg_output_flags(),
                     str(output_path),
                 ]
                 completed = _run_ffmpeg_command(command, log_messages)
+                log_path.write_text("\n".join(log_messages), encoding="utf-8")
                 if temp_path.exists():
                     temp_path.unlink()
                 if completed.returncode != 0:
@@ -432,7 +462,6 @@ def run(
                     )
                 size = output_path.stat().st_size
                 logging.info("Created file %s of size %s", output_path, size)
-                log_path.write_text("\n".join(log_messages), encoding="utf-8")
                 outputs.append(
                     ExtractEntryModel(
                         entry_id=segment.entry_id,
@@ -454,35 +483,14 @@ def run(
                         "-y",
                         "-ss",
                         f"{rel_start:.3f}",
-                        "-fflags",
-                        "+genpts",
-                        "-err_detect",
-                        "ignore_err",
-                        "-probesize",
-                        "100M",
-                        "-analyzeduration",
-                        "100M",
-                        "-ignore_unknown",
-                        "-copy_unknown",
+                        *_build_ffmpeg_input_flags(repair),
                         "-avoid_negative_ts",
                         "make_zero",
                         "-i",
                         str(source_path),
                         "-t",
                         f"{duration:.3f}",
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "0:a?",
-                        "-map_metadata",
-                        "0",
-                        "-map_chapters",
-                        "0",
-                        "-c",
-                        "copy",
-                        "-start_at_zero",
-                        "-max_interleave_delta",
-                        "0",
+                        *_build_ffmpeg_output_flags(),
                         str(output_path),
                     ]
                     completed = _run_ffmpeg_command(command, log_messages)
@@ -499,35 +507,14 @@ def run(
                             "-y",
                             "-ss",
                             f"{rel_start:.3f}",
-                            "-fflags",
-                            "+genpts",
-                            "-err_detect",
-                            "ignore_err",
-                            "-probesize",
-                            "100M",
-                            "-analyzeduration",
-                            "100M",
-                            "-ignore_unknown",
-                            "-copy_unknown",
+                            *_build_ffmpeg_input_flags(repair),
                             "-avoid_negative_ts",
                             "make_zero",
                             "-i",
                             str(source_path),
                             "-t",
                             f"{duration:.3f}",
-                            "-map",
-                            "0:v:0",
-                            "-map",
-                            "0:a?",
-                            "-map_metadata",
-                            "0",
-                            "-map_chapters",
-                            "0",
-                            "-c",
-                            "copy",
-                            "-start_at_zero",
-                            "-max_interleave_delta",
-                            "0",
+                            *_build_ffmpeg_output_flags(),
                             str(slice_path),
                         ]
                         completed = _run_ffmpeg_command(command, log_messages)
@@ -545,16 +532,7 @@ def run(
                         "ffmpeg",
                         "-hide_banner",
                         "-y",
-                        "-fflags",
-                        "+genpts",
-                        "-err_detect",
-                        "ignore_err",
-                        "-probesize",
-                        "100M",
-                        "-analyzeduration",
-                        "100M",
-                        "-ignore_unknown",
-                        "-copy_unknown",
+                        *_build_ffmpeg_input_flags(repair),
                         "-avoid_negative_ts",
                         "make_zero",
                         "-f",
@@ -563,19 +541,7 @@ def run(
                         "0",
                         "-i",
                         str(concat_list_path),
-                        "-map",
-                        "0:v:0",
-                        "-map",
-                        "0:a?",
-                        "-map_metadata",
-                        "0",
-                        "-map_chapters",
-                        "0",
-                        "-c",
-                        "copy",
-                        "-start_at_zero",
-                        "-max_interleave_delta",
-                        "0",
+                        *_build_ffmpeg_output_flags(),
                         str(output_path),
                     ]
                     completed = _run_ffmpeg_command(command, log_messages)
