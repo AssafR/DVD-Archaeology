@@ -131,27 +131,72 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         # Load image and perform OCR
         img = Image.open(image_path)
 
-        # Preprocessing for menu text: upscale + contrast + sharpen + binarize
+        # OCR Preprocessing Pipeline for DVD Menu Text
+        # =============================================
+        # This multi-stage preprocessing optimizes small, low-contrast DVD menu text
+        # for Tesseract OCR. Each step addresses specific OCR challenges.
+        
+        # 1. GRAYSCALE CONVERSION
+        # Convert to single-channel grayscale for consistent processing
         img = img.convert("L")
+        
+        # 2. UPSCALING (2x Magnification via Bicubic Interpolation)
+        # Rationale: DVD menu text is typically small (12-16px). Tesseract performs
+        # better on larger text (30-40px). 2x upscaling provides optimal balance:
+        # - Improves character recognition for small fonts
+        # - Preserves character edges without over-sharpening artifacts
+        # - Faster than 3x/4x while maintaining accuracy
+        # Testing Note: 3x magnification was tested but caused regressions
+        # (breaking up "C370" → "C 3/0", "77" → "17"). 2x is the sweet spot.
         img = img.resize((img.width * 2, img.height * 2), Image.BICUBIC)
+        
+        # 3. AUTO CONTRAST ENHANCEMENT
+        # Normalize brightness range to maximize text/background contrast
         img = ImageOps.autocontrast(img)
+        
+        # 4. UNSHARP MASKING (Edge Sharpening)
+        # Enhances character edges for clearer recognition
+        # - radius=1.2: Small radius for fine detail
+        # - percent=180: Strong sharpening (180% of edge difference)
+        # - threshold=2: Apply to all but nearly-flat regions
         img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=180, threshold=2))
+        
+        # 5. ADAPTIVE BINARIZATION (Black & White Thresholding)
+        # Convert to pure black text on white background for optimal OCR
+        # Threshold calculation: mean brightness + 20, clamped to [120, 200]
+        # This adapts to varying menu background brightness levels
         mean = ImageStat.Stat(img).mean[0]
         threshold = max(120, min(200, mean + 20))
         img = img.point(lambda p: 255 if p > threshold else 0)
 
-        # Tesseract config:
-        # --psm 7: Treat the image as a single text line.
-        # Preserve spaces so date spacing survives.
-        config = "--psm 7 -c preserve_interword_spaces=1"
+        # Tesseract OCR Configuration
+        # ============================
+        # --psm 7: Page Segmentation Mode 7 (Treat as single text line)
+        #   DVD menu buttons typically contain one line of text. This mode
+        #   prevents Tesseract from attempting multi-line detection which
+        #   can cause word splitting or incorrect ordering.
+        #
+        # -c preserve_interword_spaces=1: Preserve spacing between words
+        #   Critical for maintaining proper spacing in dates and titles
+        #   (e.g., "16 Oct 96" not "16Oct96")
+        #
+        # -c tessedit_char_blacklist=|: Exclude "|" character from recognition
+        #   DVD menus often have vertical lines/separators that Tesseract
+        #   incorrectly interprets as "|" at line ends. Blacklisting this
+        #   character prevents spurious trailing "|" in OCR output.
+        #   Testing: Successfully removed "|" artifact from all buttons with
+        #   no negative side effects.
+        config = "--psm 7 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
         
         raw_text = pytesseract.image_to_string(
             img, lang=ocr_lang, config=config
         ).strip()
         
-        # If empty with psm 7, try psm 6
+        # Fallback: If PSM 7 produces empty result, try PSM 6
+        # PSM 6 (uniform text block) is more lenient and may succeed where
+        # PSM 7's strict single-line mode fails (e.g., unexpected layouts)
         if not raw_text:
-            config = "--psm 6 -c preserve_interword_spaces=1"
+            config = "--psm 6 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
             raw_text = pytesseract.image_to_string(
                 img, lang=ocr_lang, config=config
             ).strip()

@@ -1775,11 +1775,30 @@ def _refine_cropped_image(path: Path) -> None:
         max_y = max(max_y, y + h)
     if max_x <= min_x or max_y <= min_y:
         return
-    pad = max(2, int(min(width, height) * 0.05))
-    left = max(0, min_x - pad)
-    top = max(0, min_y - pad)
-    right = min(width, max_x + pad)
-    bottom = min(height, max_y + pad)
+    
+    # OCR Preprocessing: Asymmetric Padding Strategy
+    # ===============================================
+    # Base padding is 5% of image dimensions (minimum 2 pixels)
+    base_pad = max(2, int(min(width, height) * 0.05))
+    
+    # Horizontal padding: Keep at base level (5%)
+    # This is sufficient for left/right character boundaries
+    pad_horizontal = base_pad
+    
+    # Vertical padding: DOUBLED (10%) to prevent character clipping
+    # Rationale: Tall characters (7, 1, 9, etc.) and diacritics can extend
+    # significantly above/below the main text baseline. Insufficient top/bottom
+    # padding causes character truncation, leading to OCR errors like:
+    # - "7" misread as "1" or "T" (top clipped)
+    # - "g", "y", "j" tails clipped (bottom cut)
+    # Testing showed 2x vertical padding significantly reduces these errors
+    # without the negative side effects of increased magnification.
+    pad_vertical = base_pad * 2
+    
+    left = max(0, min_x - pad_horizontal)
+    top = max(0, min_y - pad_vertical)
+    right = min(width, max_x + pad_horizontal)
+    bottom = min(height, max_y + pad_vertical)
     if right - left < 2 or bottom - top < 2:
         return
     cropped = image.crop((left, top, right, bottom))

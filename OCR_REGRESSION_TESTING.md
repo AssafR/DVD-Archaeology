@@ -56,7 +56,7 @@ The first regression test covers Ellen Season 04 DVD:
 - **Menu Page 1**: 10 buttons (episodes 65-74)
 - **Menu Page 2**: 5 buttons (episodes 75-79)
 - **Total**: 15 expected OCR results
-- **Current Accuracy**: 14/15 buttons at 90%+, 1 button at 88%
+- **Current Accuracy**: 10/15 buttons perfect (67%), 5 buttons with minor issues
 
 The test verifies that the OCR accurately extracts episode information in the format:
 ```
@@ -65,8 +65,15 @@ The test verifies that the OCR accurately extracts episode information in the fo
 
 Example ground truth: `66. 4-4 C368 16 Oct 96 The Parent Trap`
 
-**Known OCR Issue:**
-- **btn13**: 88% accuracy - OCR reads "Tf." instead of "77.", "C0378" instead of "C378", "22 Jan 9/" instead of "22 Jan 97"
+**Known OCR Issues** (5 buttons):
+- **btn1**: "2 Oct" → "20 Oct" (extra "0" inserted)
+- **btn12**: "15 Jan 97" → "15 Jan 9" (year truncation)
+- **btn13**: "77." → "Tf.", "C378" → "C0378" (multiple errors, most problematic)
+- **btn14**: "5 Feb" → "SFeb" (space missing)
+
+**Test Status**: ✅ PASSING at 85% similarity threshold
+
+For details on OCR preprocessing improvements and trade-offs, see `OCR_IMPROVEMENTS.md`.
 
 ## How to Add a New Disc Test
 
@@ -128,29 +135,30 @@ uv run pytest tests/test_ocr_regression.py::test_ocr_regression_your_disc -v
 ### Fuzzy Text Matching
 
 The test uses fuzzy string matching to handle minor OCR variations:
-- Normalizes whitespace automatically
+- Normalizes whitespace automatically (collapses multiple spaces)
+- Removes common artifacts (trailing "|", etc.)
 - Calculates similarity ratio (0.0 to 1.0)
 - Configurable minimum similarity threshold (default: 0.85 / 85%)
 
-### Multi-Page Menu Support
+### Multi-Button Testing
 
-Buttons are organized by menu page:
-- Each button has a `menu_page` number (1-based)
-- Buttons are indexed sequentially within each page
-- The test automatically groups and processes by page
+The test validates OCR across all menu buttons:
+- Tests entire menu structure (15 buttons in Ellen Season 04)
+- Compares actual OCR output against ground truth baseline
+- Reports both perfect matches and near-misses
 
 ### Detailed Failure Reporting
 
 When OCR results don't match expectations, the test provides:
-- Menu page and button ID
+- Button ID and entry location
 - Similarity percentage
 - Expected vs actual text comparison
 
 Example failure output:
 ```
-Page 1, btn2: OCR mismatch (similarity: 78.50%)
-  Expected: '66. 4-4  C368  16 Oct 96  The Parent Trap'
-  Actual:   '66. 44  C368  16 Oct 96  The Parent Trap'
+btn13: OCR mismatch (similarity: 88.31%)
+  Expected: '77. 4-15 C378 22 Jan 97 Makin' Whoopie'
+  Actual:   'Tf. 4-15 C0378 22 Jan 9/ Makin' Whoopie'
 ```
 
 ## Adjusting Similarity Threshold
@@ -202,12 +210,30 @@ uv run pytest tests/test_ocr_regression.py::test_ocr_regression_ellen_season_04 
 uv run pytest tests/test_ocr_regression.py --collect-only
 ```
 
+## Recent Improvements (2026-02-01)
+
+### OCR Preprocessing Enhancements
+The OCR accuracy was improved through systematic testing and refinement:
+
+1. **Vertical Padding Increase**: Doubled from 5% to 10% to prevent character clipping
+2. **Character Blacklist**: Added "|" to eliminate spurious artifacts
+3. **Magnification Analysis**: Tested 2x vs 3x, found 2x optimal (3x caused regressions)
+
+**Results**: 
+- Removed "|" artifact from all 15 buttons
+- Maintained 67% perfect accuracy with no new regressions
+- Comprehensive documentation added to codebase
+
+See `OCR_IMPROVEMENTS.md` for detailed analysis and trade-offs.
+
 ## Future Enhancements
 
 Possible improvements to the system:
-- Support for different OCR languages/configurations
+- Post-processing rules for common patterns ("20 Oct" → "2 Oct", "SFeb" → "5 Feb")
+- Additional regression tests for different DVD types (fonts, languages, layouts)
+- Alternative OCR engines evaluation (EasyOCR, PaddleOCR)
+- Custom trained models for DVD menu text
+- Per-button adaptive preprocessing for problematic cases
 - Visual diff generation for failed tests
 - Confidence score validation
-- Support for partial matches (substring matching)
-- Performance benchmarking
 - Integration with CI/CD pipelines

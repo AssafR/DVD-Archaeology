@@ -1,14 +1,43 @@
-# Documentation Index - SPU Button Extraction
+# Documentation Index
 
-**Date:** 2026-01-31  
-**Feature:** DVD Menu Button Extraction using SPU Overlays  
-**Status:** ✅ Fully Documented and Production Ready
+**Last Updated:** 2026-02-01  
+**Status:** ✅ Production Ready with Comprehensive Documentation
 
 ## Overview
 
-This index catalogs all documentation related to the SPU (Sub-Picture Unit) button extraction implementation. The documentation is comprehensive, covering algorithm design, implementation details, API reference, testing procedures, and troubleshooting.
+This index catalogs all project documentation, including implementation guides, research notes, testing procedures, and design decisions. The documentation covers the complete DVD extraction pipeline from SPU button detection to OCR text extraction.
 
 ## Documentation Structure
+
+### 📚 Core Features Documentation
+
+#### OCR Text Extraction (Updated 2026-02-01)
+
+##### OCR Improvements Guide ⭐ NEW
+**File:** `OCR_IMPROVEMENTS.md`  
+**Purpose:** OCR preprocessing enhancements and testing methodology  
+**Contents:**
+- Problem statement and improvements implemented
+- Vertical padding increase (2x)
+- Character blacklist ("|" artifact removal)
+- Test methodology and results (3 configurations evaluated)
+- Trade-off analysis (why 3x magnification was rejected)
+- Current accuracy metrics (67% perfect, 33% minor issues)
+- Remaining challenges and future work
+
+**Audience:** Developers working on OCR accuracy, maintainers
+
+##### OCR Regression Testing Guide
+**File:** `OCR_REGRESSION_TESTING.md`  
+**Purpose:** Automated OCR accuracy regression testing framework  
+**Contents:**
+- Test framework overview
+- How to add new disc tests
+- Ellen Season 04 baseline test (15 buttons)
+- Recent improvements and results
+- Future enhancements
+
+**Audience:** Testers, developers, QA engineers
 
 ### 📚 Primary Documentation
 
