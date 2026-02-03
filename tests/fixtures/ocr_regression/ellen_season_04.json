@@ -1,7 +1,42 @@
 {
   "disc_name": "Ellen Season 04",
-  "disc_path": "Q:\\DVD\\Ellen_Season_04\\",
   "description": "OCR regression test for Ellen Season 4 DVD menu buttons. Expected results from manual inspection of menu screens.",
+  "source_paths": {
+    "primary": "C:\\Users\\Assaf\\Desktop\\Temporary\\Ellen_Season_04",
+    "backup": "Q:\\DVD\\Ellen_Season_04\\"
+  },
+  "test_config": {
+    "min_similarity": 0.85,
+    "skip_if_unavailable": true
+  },
+  "known_issues": [
+    {
+      "entry_id": "btn1",
+      "issue": "Extra '0' in date: '2 Oct' → '20 Oct'",
+      "expected_similarity": 0.95
+    },
+    {
+      "entry_id": "btn12",
+      "issue": "Year truncation: '15 Jan 97' → '15 Jan 9'",
+      "expected_similarity": 0.93
+    },
+    {
+      "entry_id": "btn13",
+      "issue": "Multiple errors: '77.' → 'Tf.', 'C378' → 'C0378'",
+      "expected_similarity": 0.88
+    },
+    {
+      "entry_id": "btn14",
+      "issue": "Missing space: '5 Feb' → 'SFeb'",
+      "expected_similarity": 0.92
+    }
+  ],
+  "metadata": {
+    "created_date": "2026-02-01",
+    "last_updated": "2026-02-01",
+    "baseline_version": "2x magnification, 2x vertical padding, | blacklist",
+    "approved_by": "Manual verification from menu screenshots"
+  },
   "expected_results": [
     {
       "entry_id": "btn1",

@@ -1,0 +1,47 @@
+{
+  "disc_name": "Entourage - Nanny Kibbutz - Emmy 2005",
+  "description": "OCR regression test for Entourage Emmy 2005 menu buttons. Expected results from manual inspection of menu screenshot.",
+  "source_paths": {
+    "primary": "Q:\\DVDs\\0898_Entourage_Nanny-Kibbutz_Garber_Emmy2005\\"
+  },
+  "test_config": {
+    "min_similarity": 0.85,
+    "skip_if_unavailable": true
+  },
+  "known_issues": [],
+  "metadata": {
+    "created_date": "2026-02-03",
+    "baseline_version": "Manual screenshot baseline",
+    "approved_by": "Manual verification from menu screenshot"
+  },
+  "expected_results": [
+    {
+      "entry_id": "btn1",
+      "raw_text": "19. 2-11 14 Aug 05 Blue Balls Lagoon"
+    },
+    {
+      "entry_id": "btn2",
+      "raw_text": "20. 2-12 21 Aug 05 Good Morning Saigon"
+    },
+    {
+      "entry_id": "btn3",
+      "raw_text": "21. 2-13 28 Aug 05 Exodus"
+    },
+    {
+      "entry_id": "btn4",
+      "raw_text": "22. 2-14 4 Sep 05 The Abyss"
+    },
+    {
+      "entry_id": "btn5",
+      "raw_text": "Emmy 2005 Digest"
+    },
+    {
+      "entry_id": "btn6",
+      "raw_text": "All's Relative"
+    },
+    {
+      "entry_id": "btn7",
+      "raw_text": "Nanny - Kibbutz"
+    }
+  ]
+}

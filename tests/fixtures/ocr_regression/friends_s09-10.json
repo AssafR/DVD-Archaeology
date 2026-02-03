@@ -1,0 +1,98 @@
+{
+  "disc_name": "Friends_S09-10",
+  "description": "OCR regression test for Friends Season 9-10 DVD menu buttons. Expected results from manual inspection of menu screens.",
+  "source_paths": {
+    "primary": "Q:\\DVDs\\Friends_S09-10",
+    "backup": "C:\\Users\\Assaf\\Desktop\\Temporary\\Friends_S09-10"
+  },
+  "test_config": {
+    "min_similarity": 0.85,
+    "skip_if_unavailable": true,
+    "output_directory": "C:\\Users\\Assaf\\Desktop\\Temporary\\Friends_S09-10"
+  },
+  "known_issues": [],
+  "metadata": {
+    "created_date": "2026-02-01",
+    "last_updated": "2026-02-01",
+    "baseline_version": "2x magnification, 2x vertical padding, | blacklist",
+    "approved_by": "Manual verification from menu screenshots"
+  },
+  "expected_results": [
+    {
+      "entry_id": "btn1",
+      "raw_text": "203 9.09 The One With Rachel's Phone Number"
+    },
+    {
+      "entry_id": "btn2",
+      "raw_text": "207 9.13 The One Where Monica Sings"
+    },
+    {
+      "entry_id": "btn3",
+      "raw_text": "209 9.15 The One With The Mugging"
+    },
+    {
+      "entry_id": "btn4",
+      "raw_text": "217 9.23 The One In Barbados, part 1"
+    },
+    {
+      "entry_id": "btn5",
+      "raw_text": "218 9.24 The One In Barbados, part 2"
+    },
+    {
+      "entry_id": "btn6",
+      "raw_text": "220 10.02 The One Where Ross is Fine  (PART 1)"
+    },
+    {
+      "entry_id": "btn7",
+      "raw_text": "221 10.03 The One With Ross's Tan"
+    },
+    {
+      "entry_id": "btn8",
+      "raw_text": "222 10.04 The One With the Cake"
+    },
+    {
+      "entry_id": "btn9",
+      "raw_text": "223 10.05 The One Where Rachel's Sister Baby-sits"
+    },
+    {
+      "entry_id": "btn10",
+      "raw_text": "224 10.06 The One With Ross's Grant"
+    },
+    {
+      "entry_id": "btn11",
+      "raw_text": "224 10.06 The One With Ross's Grant"
+    },
+    {
+      "entry_id": "btn12",
+      "raw_text": "229 10.11 The One Where The Stripper Cries  (PART 2)"
+    },
+    {
+      "entry_id": "btn13",
+      "raw_text": "230 10.12 The One With Phoebe's Wedding"
+    },
+    {
+      "entry_id": "btn14",
+      "raw_text": "231 10.13 The One Where Joey Speaks French"
+    },
+    {
+      "entry_id": "btn15",
+      "raw_text": "232 10.14 The One With Princess Consuela"
+    },
+    {
+      "entry_id": "btn16",
+      "raw_text": "233 10.15 The One Where Estelle Dies"
+    },
+    {
+      "entry_id": "btn17",
+      "raw_text": "234 10.16 The One With Rachel's Going Away Party"
+    },
+    {
+      "entry_id": "btn18",
+      "raw_text": "235 10.17 The Last One, Part 1"
+    },
+    {
+      "entry_id": "btn19",
+      "raw_text": "236 10.18 The Last One, Part 2 (NO END)"
+    }
+  ]
+}

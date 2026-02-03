@@ -41,3 +41,6 @@ uv run dvdmenu-extract "C:\Users\Assaf\program\DVD-Archaeology\DVD_Sample_01\" -
 uv run pytest tests/test_dvd_sample_01_regression.py::test_dvd_sample_01_button_extraction -v
 #Run the full pipeline test:
 uv run pytest tests/test_dvd_sample_01_regression.py -v -s
+
+
+uv run dvdmenu-extract "Q:\DVDs\0898_Entourage_Nanny-Kibbutz_Garber_Emmy2005\" --out "C:\Users\Assaf\Desktop\Temporary\0898_Entourage_Nanny-Kibbutz_Garber_Emmy2005" --use-real-ffmpeg  --overwrite-outputs --force 

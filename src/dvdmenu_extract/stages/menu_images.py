@@ -937,22 +937,120 @@ def _extract_spu_button_rects(
         logger.info(f"    Found {len(rects)} connected components")
         
         # ------------------------------------------------------------------------
-        # Step 4: Filter components by size (buttons vs. navigation elements)
+        # Step 4: Cluster character-level regions into button text lines
         # ------------------------------------------------------------------------
-        # Button highlights: typically 80x60px or larger
-        # Navigation arrows: typically 60x28px or smaller
-        # This filtering separates the two types of elements.
+        # Many DVDs store button text as individual character glyphs (10x17px each)
+        # rather than full button highlights (80x60px+). We cluster these tiny
+        # character regions into button-sized text lines before filtering.
+        #
+        # Example: 320 character boxes (10x17) → 10 button text lines (200x20)
+        
+        # First, try clustering if we have many small components
+        small_components = [r for r in rects if (r[2] - r[0]) < 80 or (r[3] - r[1]) < 60]
+        large_components = [r for r in rects if (r[2] - r[0]) >= 80 and (r[3] - r[1]) >= 60]
+        
         page_rects = []
-        for idx, rect in enumerate(rects):
-            w, h = rect[2] - rect[0] + 1, rect[3] - rect[1] + 1
-            logger.info(f"      Component {idx+1}: ({rect[0]},{rect[1]})->({rect[2]},{rect[3]}) size: {w}x{h}")
+        
+        if len(small_components) > 20 and not large_components:
+            # Likely character-level SPU (e.g., Friends, Ellen)
+            # Cluster tiny character boxes into button text lines
+            logger.info(f"    Detected {len(small_components)} small components - attempting text clustering")
             
-            # Size threshold: ≥80x60px = button highlight
-            if w >= 80 and h >= 60:
-                logger.info(f"        -> Button highlight for page {page_index}")
-                page_rects.append(rect)
-            else:
-                logger.info(f"        -> Too small, likely navigation element")
+            from dvdmenu_extract.util.spu_text_clustering import cluster_character_rects_into_buttons
+            clustered_rects = cluster_character_rects_into_buttons(
+                small_components,
+                line_height_tolerance=10,   # Tolerant enough for character Y variations
+                char_spacing_max=20,        # Not used when merge_same_line=True
+                min_button_width=250,       # Low threshold - capture episode 229
+                min_button_height=10,       # Allow short buttons
+                max_button_height=100,      # Very permissive
+                min_aspect_ratio=10.0,      # Relaxed
+                min_char_count=15,          # Filter short nav text but keep episode 229
+                padding_left=10,
+                padding_top=2,              # Minimal vertical padding to avoid capturing adjacent buttons
+                padding_right=80,           # Extra padding to capture trailing text
+                padding_bottom=2,           # Minimal vertical padding to avoid capturing adjacent buttons
+                merge_same_line=True,       # Merge all text on same Y line (handles wide gaps)
+            )
+            
+            # If we under-detect buttons, retry with relaxed thresholds.
+            # This helps menus where some valid buttons are short (e.g., "Exodus"),
+            # but still avoids tiny nav glyphs via width/aspect filters.
+            if len(clustered_rects) < expected:
+                relaxed_rects = cluster_character_rects_into_buttons(
+                    small_components,
+                    line_height_tolerance=12,
+                    char_spacing_max=20,
+                    min_button_width=180,
+                    min_button_height=10,
+                    max_button_height=110,
+                    min_aspect_ratio=6.0,
+                    min_char_count=8,
+                    padding_left=10,
+                    padding_top=2,
+                    padding_right=100,
+                    padding_bottom=2,
+                    merge_same_line=True,
+                )
+                if len(relaxed_rects) > len(clustered_rects):
+                    logger.info(
+                        "    Relaxed clustering improved %d → %d buttons",
+                        len(clustered_rects),
+                        len(relaxed_rects),
+                    )
+                    clustered_rects = relaxed_rects
+            
+            # Final fallback for very short labels (e.g., "Exodus") on low-count menus.
+            if len(clustered_rects) < expected and expected <= 10:
+                short_label_rects = cluster_character_rects_into_buttons(
+                    small_components,
+                    line_height_tolerance=12,
+                    char_spacing_max=20,
+                    min_button_width=80,
+                    min_button_height=10,
+                    max_button_height=120,
+                    min_aspect_ratio=3.0,
+                    min_char_count=4,
+                    padding_left=10,
+                    padding_top=2,
+                    padding_right=60,
+                    padding_bottom=2,
+                    merge_same_line=True,
+                    trim_right_small_group=True,
+                    trim_right_gap_threshold=160,
+                    trim_right_max_width=180,
+                    trim_left_small_group=True,
+                    trim_left_gap_threshold=90,
+                    trim_left_max_width=150,
+                )
+                if len(short_label_rects) > len(clustered_rects):
+                    logger.info(
+                        "    Short-label clustering improved %d → %d buttons",
+                        len(clustered_rects),
+                        len(short_label_rects),
+                    )
+                    clustered_rects = short_label_rects
+            
+            logger.info(f"    Clustered {len(small_components)} characters → {len(clustered_rects)} buttons")
+            page_rects = clustered_rects
+            
+            for idx, rect in enumerate(clustered_rects):
+                w, h = rect[2] - rect[0], rect[3] - rect[1]
+                logger.info(f"      Button {idx+1}: ({rect[0]},{rect[1]})->({rect[2]},{rect[3]}) size: {w}x{h}")
+        
+        else:
+            # Traditional large button highlights (or mixed)
+            # Use original size-based filtering
+            for idx, rect in enumerate(rects):
+                w, h = rect[2] - rect[0], rect[3] - rect[1]
+                logger.info(f"      Component {idx+1}: ({rect[0]},{rect[1]})->({rect[2]},{rect[3]}) size: {w}x{h}")
+                
+                # Size threshold: ≥80x60px = button highlight
+                if w >= 80 and h >= 60:
+                    logger.info(f"        -> Button highlight for page {page_index}")
+                    page_rects.append(rect)
+                else:
+                    logger.info(f"        -> Too small, skipping")
         
         if not page_rects:
             text_rects = find_spu_text_band_rects(bitmap)
@@ -981,6 +1079,21 @@ def _extract_spu_button_rects(
     for page_idx, rects in page_buttons:
         for rect in rects:
             all_rects_with_pages.append((page_idx, rect))
+    
+    # If we detected more buttons than expected, rank by width and keep the widest ones
+    # (Episode buttons are typically wider than navigation elements)
+    if len(all_rects_with_pages) > expected:
+        all_rects_with_pages = _filter_rect_outliers_by_size(all_rects_with_pages)
+        all_rects_with_pages = _filter_rect_low_height_outliers(
+            all_rects_with_pages, expected
+        )
+        logger.info(f"  Detected {len(all_rects_with_pages)} buttons but expected {expected}, ranking by width")
+        # Sort by width (descending) and keep top N
+        all_rects_ranked = sorted(all_rects_with_pages, key=lambda x: x[1][2] - x[1][0], reverse=True)
+        all_rects_with_pages = all_rects_ranked[:expected]
+        logger.info(f"  Kept {len(all_rects_with_pages)} widest buttons")
+        # Re-sort by page and position for consistent ordering
+        all_rects_with_pages.sort(key=lambda x: (x[0], x[1][1], x[1][0]))  # page, Y, X
     
     for idx, (page_idx, rect) in enumerate(all_rects_with_pages):
         logger.info(f"  Button {idx+1} (page {page_idx}): ({rect[0]},{rect[1]})->({rect[2]},{rect[3]}) "
@@ -1079,9 +1192,34 @@ def _detect_menu_rects_multi_page(
         for page_idx, frames in enumerate(frame_pages):
             logger.info(f"    Page {page_idx}: {len(frames)} frames")
         
+        # Optional SPU/frame alignment: use OCR line boxes on the page's frame
+        # to estimate a single vertical offset for all SPU rects on that page.
+        # Optional: align SPU rects to visual text lines in each page frame.
+        page_rects_map: dict[int, list[tuple[int, int, int, int]]] = {}
+        for page_idx, rect in spu_results[:expected]:
+            page_rects_map.setdefault(page_idx, []).append(rect)
+        aligned_rects_by_page: dict[int, list[tuple[int, int, int, int]]] = {}
+        for page_idx, rects in page_rects_map.items():
+            if page_idx < len(frame_pages) and frame_pages[page_idx]:
+                frame = frame_pages[page_idx][0]
+                aligned_rects = _align_spu_rects_to_frame(
+                    rects, frame
+                )
+                # Regularize heights when a page shows consistent button rows.
+                aligned_rects = _regularize_rect_heights(aligned_rects, frame)
+                aligned_rects_by_page[page_idx] = aligned_rects
+            else:
+                aligned_rects_by_page[page_idx] = rects
+
         # Map each button to the correct frame based on its page index
         result = {}
+        page_offsets: dict[int, int] = {}
         for idx, (page_idx, rect) in enumerate(spu_results[:expected]):
+            rects_for_page = aligned_rects_by_page.get(page_idx, [])
+            offset = page_offsets.get(page_idx, 0)
+            if offset < len(rects_for_page):
+                rect = rects_for_page[offset]
+            page_offsets[page_idx] = offset + 1
             if page_idx < len(frame_pages) and frame_pages[page_idx]:
                 frame = frame_pages[page_idx][0]  # Use first frame of the page
                 result[idx] = (frame, rect)
@@ -1891,6 +2029,220 @@ def _ocr_line_rects(bg_path: Path) -> list[RectModel]:
     return rects
 
 
+def _align_spu_rects_to_frame(
+    rects: list[tuple[int, int, int, int]],
+    frame_path: Path,
+) -> list[tuple[int, int, int, int]]:
+    """Align SPU rects to the rendered frame using OCR line boxes.
+
+    This is a local helper inside menu_images (not the pipeline OCR stage).
+    It estimates a single y-shift per page to compensate for SPU/frame
+    coordinate drift without hardcoding any resolution.
+    """
+    if not rects:
+        return rects
+    try:
+        ocr_rects = _ocr_line_rects(frame_path)
+    except Exception:
+        return rects
+    if len(ocr_rects) < 3:
+        return rects
+    deltas: list[float] = []
+    min_overlap = 40
+    for x1, y1, x2, y2 in rects:
+        center_y = (y1 + y2) / 2.0
+        best_delta: float | None = None
+        for ocr in ocr_rects:
+            ocr_x1 = ocr.x
+            ocr_x2 = ocr.x + ocr.w
+            overlap = min(x2, ocr_x2) - max(x1, ocr_x1)
+            if overlap < min_overlap:
+                continue
+            delta = (ocr.y + (ocr.h / 2.0)) - center_y
+            if best_delta is None or abs(delta) < abs(best_delta):
+                best_delta = delta
+        if best_delta is not None:
+            deltas.append(best_delta)
+    if len(deltas) < 3:
+        return rects
+    from statistics import median
+    shift = int(round(median(deltas)))
+    if abs(shift) < 4 or abs(shift) > 40:
+        return rects
+    try:
+        _, height = _probe_image_size(frame_path)
+    except Exception:
+        return rects
+    adjusted: list[tuple[int, int, int, int]] = []
+    for x1, y1, x2, y2 in rects:
+        new_y1 = max(0, min(height - 1, y1 + shift))
+        new_y2 = max(0, min(height - 1, y2 + shift))
+        adjusted.append((x1, new_y1, x2, new_y2))
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "menu_images: aligned SPU rects by y-shift=%d using OCR lines (%s)",
+        shift,
+        frame_path.name,
+    )
+    return adjusted
+
+
+def _regularize_rect_heights(
+    rects: list[tuple[int, int, int, int]],
+    frame_path: Path,
+) -> list[tuple[int, int, int, int]]:
+    """Normalize button heights to the page median when they are consistent.
+
+    Uses IQR-based outlier detection (no fixed pixel thresholds) to avoid
+    touching multi-line or atypical buttons. Only rects inside the IQR
+    bounds are resized to the median height; outliers are left as-is.
+    """
+    if len(rects) < 4:
+        return rects
+    heights = [r[3] - r[1] + 1 for r in rects]
+    if not heights:
+        return rects
+    try:
+        from statistics import median, quantiles
+        sorted_heights = sorted(heights)
+        median_h = median(sorted_heights)
+        if median_h <= 0:
+            return rects
+        q1, _, q3 = quantiles(sorted_heights, n=4, method="inclusive")
+        iqr = q3 - q1
+    except Exception:
+        return rects
+    if iqr == 0:
+        return rects
+    lower = q1 - (1.5 * iqr)
+    upper = q3 + (1.5 * iqr)
+    try:
+        _, height = _probe_image_size(frame_path)
+    except Exception:
+        height = None
+    adjusted: list[tuple[int, int, int, int]] = []
+    resized = 0
+    outliers = 0
+    target_h = int(round(median_h))
+    for x1, y1, x2, y2 in rects:
+        h = y2 - y1 + 1
+        if h < lower or h > upper:
+            outliers += 1
+            adjusted.append((x1, y1, x2, y2))
+            continue
+        center = (y1 + y2) / 2.0
+        new_y1 = int(round(center - (target_h - 1) / 2.0))
+        new_y2 = new_y1 + target_h - 1
+        if height is not None:
+            if new_y1 < 0:
+                new_y1 = 0
+                new_y2 = min(height - 1, new_y1 + target_h - 1)
+            elif new_y2 >= height:
+                new_y2 = height - 1
+                new_y1 = max(0, new_y2 - (target_h - 1))
+        adjusted.append((x1, new_y1, x2, new_y2))
+        if new_y1 != y1 or new_y2 != y2:
+            resized += 1
+    if resized:
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "menu_images: regularized %d rect heights to median=%d (outliers=%d)",
+            resized,
+            target_h,
+            outliers,
+        )
+    return adjusted
+
+
+def _filter_rect_outliers_by_size(
+    rects_with_pages: list[tuple[int, tuple[int, int, int, int]]],
+) -> list[tuple[int, tuple[int, int, int, int]]]:
+    """Remove likely navigation widgets using size outliers (IQR-based).
+
+    Drops rects that are *simultaneously* low-width and low-height outliers.
+    Uses no fixed pixel thresholds; only relative distribution of sizes.
+    """
+    if len(rects_with_pages) < 6:
+        return rects_with_pages
+    widths = []
+    heights = []
+    for _, (x1, y1, x2, y2) in rects_with_pages:
+        widths.append((x2 - x1 + 1))
+        heights.append((y2 - y1 + 1))
+    try:
+        from statistics import quantiles
+        w_sorted = sorted(widths)
+        h_sorted = sorted(heights)
+        w_q1, _, w_q3 = quantiles(w_sorted, n=4, method="inclusive")
+        h_q1, _, h_q3 = quantiles(h_sorted, n=4, method="inclusive")
+        w_iqr = w_q3 - w_q1
+        h_iqr = h_q3 - h_q1
+    except Exception:
+        return rects_with_pages
+    if w_iqr == 0 or h_iqr == 0:
+        return rects_with_pages
+    w_lower = w_q1 - (1.5 * w_iqr)
+    h_lower = h_q1 - (1.5 * h_iqr)
+    filtered: list[tuple[int, tuple[int, int, int, int]]] = []
+    removed = 0
+    for page_idx, rect in rects_with_pages:
+        x1, y1, x2, y2 = rect
+        w = x2 - x1 + 1
+        h = y2 - y1 + 1
+        if w < w_lower and h < h_lower:
+            removed += 1
+            continue
+        filtered.append((page_idx, rect))
+    if removed:
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "menu_images: removed %d small outlier rect(s) (size filter)",
+            removed,
+        )
+    return filtered
+
+
+def _filter_rect_low_height_outliers(
+    rects_with_pages: list[tuple[int, tuple[int, int, int, int]]],
+    expected: int,
+) -> list[tuple[int, tuple[int, int, int, int]]]:
+    """Drop low-height outliers if we still keep >= expected rects."""
+    if len(rects_with_pages) < 6:
+        return rects_with_pages
+    heights = [(r[1][3] - r[1][1] + 1) for r in rects_with_pages]
+    try:
+        from statistics import quantiles
+        h_sorted = sorted(heights)
+        h_q1, _, h_q3 = quantiles(h_sorted, n=4, method="inclusive")
+        h_iqr = h_q3 - h_q1
+    except Exception:
+        return rects_with_pages
+    if h_iqr == 0:
+        return rects_with_pages
+    h_lower = h_q1 - (1.5 * h_iqr)
+    candidates = [
+        (page_idx, rect)
+        for (page_idx, rect), h in zip(rects_with_pages, heights, strict=False)
+        if h < h_lower
+    ]
+    if not candidates:
+        return rects_with_pages
+    if len(rects_with_pages) - len(candidates) < expected:
+        return rects_with_pages
+    filtered = [
+        (page_idx, rect)
+        for (page_idx, rect), h in zip(rects_with_pages, heights, strict=False)
+        if h >= h_lower
+    ]
+    if len(filtered) != len(rects_with_pages):
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "menu_images: removed %d low-height outlier rect(s)",
+            len(rects_with_pages) - len(filtered),
+        )
+    return filtered
+
+
 def _choose_ocr_rect(
     rects: list[RectModel],
     entry_id: str,
@@ -1913,6 +2265,28 @@ def _normalize_rect_to_image(rect: RectModel, size: Tuple[int, int]) -> RectMode
         return rect
     max_x = rect.x + rect.w
     max_y = rect.y + rect.h
+    # If the rect already fits the target scale (but slightly exceeds bounds),
+    # clamp it instead of scaling (avoids mis-scaling SPU rects in 720p space).
+    if rect.w <= width and rect.h <= height:
+        max_w = max(1, width - rect.x)
+        max_h = max(1, height - rect.y)
+        return RectModel(
+            x=max(0, rect.x),
+            y=max(0, rect.y),
+            w=min(rect.w, max_w),
+            h=min(rect.h, max_h),
+        )
+    # Also clamp when rects are only slightly beyond the frame size.
+    # This captures SPU rects that are already in frame coordinates.
+    if max_x <= (width * 1.2) and max_y <= (height * 1.2):
+        max_w = max(1, width - rect.x)
+        max_h = max(1, height - rect.y)
+        return RectModel(
+            x=max(0, rect.x),
+            y=max(0, rect.y),
+            w=min(rect.w, max_w),
+            h=min(rect.h, max_h),
+        )
     if max_x <= 1024 and max_y <= 1024:
         scale_x = width / 1024
         scale_y = height / 1024
@@ -2026,11 +2400,14 @@ def run(
     button_frame_map: dict[str, dict[int, Path]] = {}  # menu_id -> button_index -> frame_path
     btn_it_analysis: dict[str, MenuPageAnalysis] = {}  # menu_id -> BTN_IT page analysis
     button_to_page: dict[str, dict[int, int]] = {}  # menu_id -> button_idx -> page_num
+    menu_expected_counts: dict[str, int] = {}
     if use_real_ffmpeg and video_ts_path:
         entries_by_menu: dict[str, list[MenuEntryModel]] = {}
         for entry in ordered_entries:
             menu_id = entry.menu_id or "unknown_menu"
             entries_by_menu.setdefault(menu_id, []).append(entry)
+        for menu_id, menu_entries in entries_by_menu.items():
+            menu_expected_counts[menu_id] = len(menu_entries)
         for menu_id, menu_entries in entries_by_menu.items():
             if any(
                 entry.selection_rect or entry.highlight_rect or entry.rect
@@ -2306,6 +2683,27 @@ def run(
                         if guided_rect is not None:
                             crop_rect = guided_rect
                             used_guidance = True
+                # If SPU-derived rect is much wider than OCR line rect, trim to OCR line.
+                if not used_guidance and entry.menu_id:
+                    expected_count = menu_expected_counts.get(entry.menu_id)
+                    if entry.menu_id not in menu_ocr_rects:
+                        menu_ocr_rects[entry.menu_id] = _ocr_line_rects(bg_path)
+                    ocr_rects = menu_ocr_rects.get(entry.menu_id, [])
+                    chosen = _choose_ocr_rect(ocr_rects, entry.entry_id)
+                    if (
+                        expected_count
+                        and len(ocr_rects) >= expected_count
+                        and chosen is not None
+                    ):
+                        width_ratio = crop_rect.w / max(1, chosen.w)
+                        right_overflow = (crop_rect.x + crop_rect.w) - (chosen.x + chosen.w)
+                        if width_ratio >= 1.35 and right_overflow > 40:
+                            crop_rect = chosen
+                            used_guidance = True
+                            logger.info(
+                                "menu_images: trimming wide rect via OCR line for %s",
+                                entry.entry_id,
+                            )
                 if not crop_rect:
                     raise ValidationError(
                         f"Missing button rect for entry_id {entry.entry_id} even after fallback"
@@ -2317,6 +2715,7 @@ def run(
                     use_real_ffmpeg
                     and not use_reference_guidance
                     and entry.entry_id not in fallback_entries
+                    and menu_id not in button_frame_map  # SPU-based rects should not be shrunk
                     and crop_rect.w > 100
                     and crop_rect.h < 90
                 ):

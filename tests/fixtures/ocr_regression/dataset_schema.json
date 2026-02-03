@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OCR Regression Test Dataset",
+  "description": "Schema for OCR regression test datasets. Each dataset defines expected OCR results for a DVD disc.",
+  "type": "object",
+  "required": ["disc_name", "source_paths", "expected_results"],
+  "properties": {
+    "disc_name": {
+      "type": "string",
+      "description": "Human-readable name for this disc (e.g., 'Ellen Season 04')"
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional description of what this test covers"
+    },
+    "source_paths": {
+      "type": "object",
+      "description": "Source DVD paths with fallback support",
+      "required": ["primary"],
+      "properties": {
+        "primary": {
+          "type": "string",
+          "description": "Primary path to DVD directory (e.g., 'Q:\\DVD\\Ellen_Season_04\\')"
+        },
+        "backup": {
+          "type": "string",
+          "description": "Optional backup path if primary is unavailable (e.g., extracted output directory)"
+        }
+      }
+    },
+    "test_config": {
+      "type": "object",
+      "description": "Test configuration and thresholds",
+      "properties": {
+        "min_similarity": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.85,
+          "description": "Minimum similarity ratio (0.0 to 1.0) to pass"
+        },
+        "skip_if_unavailable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Skip test if no source paths are available"
+        },
+        "output_directory": {
+          "type": "string",
+          "description": "Optional output directory for pipeline results. If not specified, uses pytest's tmp_path"
+        }
+      }
+    },
+    "expected_results": {
+      "type": "array",
+      "description": "Ground truth OCR results for each button",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["entry_id", "raw_text"],
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "pattern": "^btn\\d+$",
+            "description": "Button entry ID (e.g., 'btn1', 'btn2')"
+          },
+          "raw_text": {
+            "type": "string",
+            "description": "Expected raw text from OCR (ground truth)"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional notes about this button (known issues, etc.)"
+          }
+        }
+      }
+    },
+    "known_issues": {
+      "type": "array",
+      "description": "List of known OCR issues for this disc",
+      "items": {
+        "type": "object",
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "description": "Button with known issue"
+          },
+          "issue": {
+            "type": "string",
+            "description": "Description of the issue"
+          },
+          "expected_similarity": {
+            "type": "number",
+            "description": "Expected similarity for this button (if lower than threshold)"
+          }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional metadata about the dataset",
+      "properties": {
+        "created_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Date this dataset was created"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date",
+          "description": "Date this dataset was last updated"
+        },
+        "baseline_version": {
+          "type": "string",
+          "description": "Version or commit hash when baseline was captured"
+        },
+        "approved_by": {
+          "type": "string",
+          "description": "Person who approved this baseline"
+        }
+      }
+    }
+  }
+}

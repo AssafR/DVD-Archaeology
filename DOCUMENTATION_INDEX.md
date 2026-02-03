@@ -27,17 +27,24 @@ This index catalogs all project documentation, including implementation guides, 
 
 **Audience:** Developers working on OCR accuracy, maintainers
 
-##### OCR Regression Testing Guide
-**File:** `OCR_REGRESSION_TESTING.md`  
-**Purpose:** Automated OCR accuracy regression testing framework  
+##### OCR Regression Testing Framework ⭐ UPDATED 2026-02-01
+**File:** `OCR_REGRESSION_FRAMEWORK_GUIDE.md`  
+**Purpose:** Complete guide to generalized, auto-discovering OCR regression testing  
 **Contents:**
-- Test framework overview
-- How to add new disc tests
-- Ellen Season 04 baseline test (15 buttons)
-- Recent improvements and results
-- Future enhancements
+- Auto-discovery system (just drop in JSON files!)
+- Primary + backup source paths
+- Baseline management and approval workflow
+- Known issues tracking per button
+- Detailed JSON + Markdown reporting
+- Best practices and troubleshooting
 
 **Audience:** Testers, developers, QA engineers
+
+##### Legacy Documentation
+**File:** `OCR_REGRESSION_TESTING.md`  
+**Purpose:** Original OCR regression testing documentation  
+**Status:** Superseded by OCR_REGRESSION_FRAMEWORK_GUIDE.md  
+**Note:** Still contains useful historical context and test results
 
 ### 📚 Primary Documentation
 
@@ -127,6 +134,18 @@ This index catalogs all project documentation, including implementation guides, 
   - Step-by-step annotations
   - Rationale for each decision
   - Size threshold explanations
+- SPU-to-frame alignment notes
+  - OCR-based per-page y-shift (no hardcoded resolution)
+  - Fallback behavior when OCR is insufficient
+- Button height regularizer
+  - IQR-based outlier detection (no fixed pixel thresholds)
+  - Resize inlier rects to median height
+- Size outlier filter
+  - IQR-based removal of low width/height outliers
+  - Runs before width-ranking when too many rects
+- Low-height outlier filter
+  - IQR-based drop of short rects when safe
+  - Preserves expected count before ranking
 
 ### 🧪 Test Documentation
 

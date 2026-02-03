@@ -60,6 +60,47 @@ Use static dark-region detection on:
 - Representative frame from Page 1
 Combine results to get all buttons.
 
+### SPU-to-Frame Alignment (2026-02-03)
+Some menus report correct SPU overlay coordinates, but the rendered frame is
+vertically offset (e.g., Friends S09-10 page 2). To avoid hardcoded offsets,
+`menu_images` now computes a per-page **y-shift** by:
+1. Running lightweight OCR on the menu frame to get text line bounding boxes.
+2. Matching SPU rects to OCR lines by horizontal overlap.
+3. Taking the median vertical delta as the page-wide correction.
+
+This happens *inside* `menu_images` during multi-page SPU mapping and is
+independent of the pipeline OCR stage. If OCR yields too few lines or the
+offset is implausible, it falls back to the raw SPU rects.
+
+### Button Height Regularizer (2026-02-03)
+Most menu pages render buttons with a consistent row height. `menu_images` now
+optionally normalizes rect heights to the **page median** using IQR-based
+outlier detection (no fixed pixel thresholds):
+1. Compute heights for all rects on a page.
+2. Use IQR bounds to detect outliers (multi-line or atypical buttons).
+3. Resize only inlier rects to the median height, leaving outliers untouched.
+
+This provides light regularization and anomaly detection without hardcoding
+dimensions. If the page has too few rects or no consistent height, the step
+is skipped.
+
+### Size Outlier Filter (2026-02-03)
+When SPU clustering yields more rects than expected, `menu_images` now applies
+an IQR-based size filter to **remove small low-width/low-height outliers**.
+This is intended to drop navigation arrows/widgets before width-ranking:
+1. Compute width/height distributions across rects.
+2. Mark rects that are low outliers in **both** width and height.
+3. Remove those rects, then rank by width if still above expected count.
+
+No fixed pixel thresholds are used; the filter is relative to the page’s
+rect size distribution.
+
+### Low-Height Outlier Filter (2026-02-03)
+If there are still more rects than expected, `menu_images` also drops **low
+height outliers** (IQR-based) *only when* doing so still leaves at least the
+expected count. This targets short navigation widgets (e.g., arrows, play-all)
+without risking removal of valid buttons on sparse pages.
+
 ### Long-Term (General Algorithm):
 1. **Always separate pages first** (temporal clustering with adaptive threshold)
 2. **Try frame differencing per-page** (may work for DVDs with animated menus)
