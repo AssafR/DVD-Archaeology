@@ -44,3 +44,6 @@ uv run pytest tests/test_dvd_sample_01_regression.py -v -s
 
 
 uv run dvdmenu-extract "Q:\DVDs\0898_Entourage_Nanny-Kibbutz_Garber_Emmy2005\" --out "C:\Users\Assaf\Desktop\Temporary\0898_Entourage_Nanny-Kibbutz_Garber_Emmy2005" --use-real-ffmpeg  --overwrite-outputs --force 
+
+Full OCR Regression:
+uv run pytest tests/test_ocr_regression.py -k ocr_regression

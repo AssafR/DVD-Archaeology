@@ -1916,22 +1916,14 @@ def _refine_cropped_image(path: Path) -> None:
     
     # OCR Preprocessing: Asymmetric Padding Strategy
     # ===============================================
-    # Base padding is 5% of image dimensions (minimum 2 pixels)
-    base_pad = max(2, int(min(width, height) * 0.05))
-    
-    # Horizontal padding: Keep at base level (5%)
-    # This is sufficient for left/right character boundaries
-    pad_horizontal = base_pad
-    
-    # Vertical padding: DOUBLED (10%) to prevent character clipping
-    # Rationale: Tall characters (7, 1, 9, etc.) and diacritics can extend
-    # significantly above/below the main text baseline. Insufficient top/bottom
-    # padding causes character truncation, leading to OCR errors like:
-    # - "7" misread as "1" or "T" (top clipped)
-    # - "g", "y", "j" tails clipped (bottom cut)
-    # Testing showed 2x vertical padding significantly reduces these errors
-    # without the negative side effects of increased magnification.
-    pad_vertical = base_pad * 2
+    # Base padding percentages are computed per-axis to avoid under-padding on
+    # long, short-height buttons (common for episode lists).
+    # Using min(width, height) previously reduced horizontal padding to only
+    # 2px on 400x50 crops, which clipped trailing characters like "on" in
+    # "Saigon". Computing per-axis keeps generous padding where text actually
+    # flows.
+    pad_horizontal = max(4, int(width * 0.05))   # 5% of width, minimum 4px
+    pad_vertical = max(4, int(height * 0.10))    # 10% of height, minimum 4px
     
     left = max(0, min_x - pad_horizontal)
     top = max(0, min_y - pad_vertical)
