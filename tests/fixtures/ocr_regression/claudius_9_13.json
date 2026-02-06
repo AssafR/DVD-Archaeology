@@ -1,0 +1,40 @@
+{
+  "disc_name": "Claudius 9-13",
+  "description": "OCR regression baseline for Claudius episodes 9-13 menu buttons (text manually transcribed from provided screenshot).",
+  "source_paths": {
+    "primary": "Q:\\\\DVDs\\\\Claudius 9-13\\\\"
+  },
+  "test_config": {
+    "min_similarity": 0.85,
+    "skip_if_unavailable": true
+  },
+  "expected_results": [
+    {
+      "entry_id": "btn1",
+      "raw_text": "(9) Zeus, by Jove!"
+    },
+    {
+      "entry_id": "btn2",
+      "raw_text": "(10) Hail Who?"
+    },
+    {
+      "entry_id": "btn3",
+      "raw_text": "(11) Fools Luck"
+    },
+    {
+      "entry_id": "btn4",
+      "raw_text": "(12) A God in Colchester"
+    },
+    {
+      "entry_id": "btn5",
+      "raw_text": "(13) Old King Log"
+    }
+  ],
+  "known_issues": [],
+  "metadata": {
+    "created_date": "2026-02-05",
+    "last_updated": "2026-02-05",
+    "baseline_version": "Manual transcription from screenshot",
+    "approved_by": "Manual verification"
+  }
+}

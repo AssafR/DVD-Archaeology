@@ -129,6 +129,7 @@ class SpuBitmap:
     width: int
     height: int
     pixels: list[list[int]]
+    # alpha / color info is not needed for mask; presence of non-zero pixels is enough.
 
 
 def parse_spu_control(packet: bytes) -> SpuControl | None:

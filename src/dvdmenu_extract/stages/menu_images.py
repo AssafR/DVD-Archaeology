@@ -35,6 +35,7 @@ from dvdmenu_extract.util.libdvdread_spu import (
     iter_spu_packets,
     find_spu_button_rects,
 )
+from dvdmenu_extract.util.libdvdread_spu import SpuBitmap
 import base64
 
 
@@ -698,7 +699,7 @@ def _detect_rects_from_image_file(
 def _extract_spu_button_rects(
     vob_path: Path,
     expected: int,
-) -> list[tuple[int, tuple[int, int, int, int]]]:
+) -> tuple[list[tuple[int, tuple[int, int, int, int]]], dict[int, SpuBitmap]]:
     """
     Extract button rectangles directly from SPU (Sub-Picture Unit) overlays in VOB.
     
@@ -747,11 +748,12 @@ def _extract_spu_button_rects(
         expected: Expected number of buttons total (for validation logging)
     
     Returns:
-        List of (page_index, rect) tuples where:
-        - page_index: 0-based menu page number (from SPU packet order)
-        - rect: (x1, y1, x2, y2) button rectangle in frame coordinates
+        (
+            List of (page_index, rect) tuples where rect = (x1, y1, x2, y2),
+            Dict of page_index -> SpuBitmap (decoded SPU bitmap for that page)
+        )
         
-        Returns empty list if:
+        Returns ([], {}) if:
         - VOB cannot be read
         - No SPU packets found
         - No valid button regions detected
@@ -788,7 +790,7 @@ def _extract_spu_button_rects(
         logger.info(f"  Read {len(vob_data)} bytes from VOB")
     except Exception as e:
         logger.error(f"  Failed to read VOB: {e}")
-        return []
+        return [], {}
     
     # Reassemble fragmented SPU packets based on size headers
     def reassemble_spu_packets(vob_data: bytes):
@@ -890,6 +892,7 @@ def _extract_spu_button_rects(
     # For multi-page menus: packet 1 = page 0, packet 2 = page 1, etc.
     
     page_buttons = []  # List of (page_index, list of rects)
+    page_bitmaps: dict[int, SpuBitmap] = {}
     packet_count = 0
     
     for substream_id, packet in reassemble_spu_packets(vob_data):
@@ -923,6 +926,7 @@ def _extract_spu_button_rects(
         if not bitmap:
             logger.warning(f"  SPU packet {packet_count}: failed to decode bitmap")
             continue
+        page_bitmaps[page_index] = bitmap
         
         # Count non-zero pixels (for diagnostic purposes)
         non_zero = sum(1 for row in bitmap.pixels for px in row if px != 0)
@@ -1072,7 +1076,7 @@ def _extract_spu_button_rects(
     
     if not page_buttons:
         logger.warning(f"  No button rectangles found in SPU overlays!")
-        return []
+        return [], page_bitmaps
     
     # Flatten all buttons with page information
     all_rects_with_pages = []
@@ -1099,8 +1103,8 @@ def _extract_spu_button_rects(
         logger.info(f"  Button {idx+1} (page {page_idx}): ({rect[0]},{rect[1]})->({rect[2]},{rect[3]}) "
                    f"size: {rect[2]-rect[0]+1}x{rect[3]-rect[1]+1}")
     
-    # Return both page info and rectangles
-    return all_rects_with_pages
+    # Return both page info and rectangles, plus page bitmaps for masks
+    return all_rects_with_pages, page_bitmaps
 
 
 def _detect_menu_rects_multi_page(
@@ -1108,7 +1112,7 @@ def _detect_menu_rects_multi_page(
     output_dir: Path,
     expected: int,
     sample_interval: float = 3.0,
-) -> dict[int, tuple[Path, tuple[int, int, int, int]]]:
+) -> tuple[dict[int, tuple[Path, tuple[int, int, int, int]]], dict[int, Path]]:
     """
     Detect button rectangles across multiple menu pages by sampling frames.
     
@@ -1122,8 +1126,11 @@ def _detect_menu_rects_multi_page(
         sample_interval: Seconds between frame samples (default: 3.0)
     
     Returns:
-        dict mapping button_index (0-based) -> (frame_path, rect_tuple)
-        where rect_tuple is (x1, y1, x2, y2)
+        (
+            dict mapping button_index (0-based) -> (frame_path, rect_tuple)
+            where rect_tuple is (x1, y1, x2, y2),
+            dict mapping button_index -> mask_path (SPU-derived binary mask),
+        )
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -1131,7 +1138,12 @@ def _detect_menu_rects_multi_page(
     # FIRST: Try extracting button rectangles from SPU overlays
     # This is the correct approach for DVD menus
     logger.info(f"menu_images: Attempting SPU-based button detection for {vob_path.name}")
-    spu_results = _extract_spu_button_rects(vob_path, expected)
+    spu_result_obj = _extract_spu_button_rects(vob_path, expected)
+    page_bitmaps: dict[int, SpuBitmap] = {}
+    if isinstance(spu_result_obj, tuple) and len(spu_result_obj) == 2:
+        spu_results, page_bitmaps = spu_result_obj
+    else:
+        spu_results = spu_result_obj
     
     if spu_results and len(spu_results) >= expected:
         logger.info(f"menu_images: Successfully extracted {len(spu_results)} buttons from SPU overlays")
@@ -1157,7 +1169,7 @@ def _detect_menu_rects_multi_page(
         
         if not extracted_frames:
             logger.warning(f"  No frames extracted, cannot map buttons to frames")
-            return {}
+            return {}, {}
         
         # Group frames by page using the same logic as the fallback
         from PIL import ImageChops, Image
@@ -1212,7 +1224,8 @@ def _detect_menu_rects_multi_page(
                 aligned_rects_by_page[page_idx] = rects
 
         # Map each button to the correct frame based on its page index
-        result = {}
+        result: dict[int, tuple[Path, tuple[int, int, int, int]]] = {}
+        mask_map: dict[int, Path] = {}
         page_offsets: dict[int, int] = {}
         for idx, (page_idx, rect) in enumerate(spu_results[:expected]):
             rects_for_page = aligned_rects_by_page.get(page_idx, [])
@@ -1228,8 +1241,15 @@ def _detect_menu_rects_multi_page(
                 # Fallback to first frame if page not found
                 result[idx] = (extracted_frames[0], rect)
                 logger.warning(f"  Button {idx} (SPU page {page_idx}) -> page not found, using frame 0")
+            
+            # Save SPU-derived mask for this button if we have a bitmap
+            bitmap = page_bitmaps.get(page_idx)
+            if bitmap:
+                mask_path = _save_spu_mask(rect, bitmap, temp_dir, idx)
+                if mask_path:
+                    mask_map[idx] = mask_path
         
-        return result
+        return result, mask_map
     
     logger.info(f"menu_images: SPU detection found {len(spu_results)} buttons, expected {expected}")
     logger.info(f"menu_images: Falling back to heuristic frame-based detection")
@@ -1238,7 +1258,7 @@ def _detect_menu_rects_multi_page(
     duration = _probe_video_duration(vob_path)
     if duration is None or duration <= 0:
         logger.warning(f"Cannot determine duration for {vob_path}, falling back to single frame")
-        return {}
+        return {}, {}
     
     # Extract and detect on frames
     temp_dir = output_dir / "_menu_detect_multipage"
@@ -1607,7 +1627,7 @@ def _detect_menu_rects_multi_page(
     
     if not frame_detections:
         logger.warning("No buttons detected in any sampled frames")
-        return {}
+        return {}, {}
     
     # Now match buttons across frames
     # Strategy: For each button position, find the "best" frame that has it
@@ -1650,7 +1670,7 @@ def _detect_menu_rects_multi_page(
         if button_idx >= expected:
             break
     
-    return button_map
+    return button_map, {}
 
 
 def _detect_menu_rects_from_static_frame(
@@ -1861,7 +1881,7 @@ def _detect_menu_rects_from_static_frame(
     rects = deduped
     rects = rects[:expected]
     rects = sorted(rects, key=lambda r: (r[1], r[0]))
-    return rects
+    return rects, page_bitmaps
 
 
 def _crop_image(input_png: Path, output_png: Path, rect: RectModel) -> None:
@@ -2146,6 +2166,52 @@ def _regularize_rect_heights(
     return adjusted
 
 
+def _save_spu_mask(
+    rect: tuple[int, int, int, int],
+    bitmap: SpuBitmap,
+    output_dir: Path,
+    button_index: int,
+) -> Path | None:
+    """
+    Save a binary mask (PNG) for the given rect using SPU bitmap pixels.
+    
+    The SPU bitmap is positioned at (bitmap.x, bitmap.y) in frame coordinates.
+    Pixels with value != 0 are treated as foreground (255), others as background (0).
+    """
+    from PIL import Image
+
+    x1, y1, x2, y2 = rect
+    w = x2 - x1 + 1
+    h = y2 - y1 + 1
+    if w <= 0 or h <= 0:
+        return None
+
+    mask_bytes = bytearray(w * h)
+    count = 0
+    for row in range(h):
+        by = y1 + row - bitmap.y
+        if by < 0 or by >= bitmap.height:
+            continue
+        bmp_row = bitmap.pixels[by]
+        base = row * w
+        for col in range(w):
+            bx = x1 + col - bitmap.x
+            if bx < 0 or bx >= bitmap.width:
+                continue
+            if bmp_row[bx] != 0:
+                mask_bytes[base + col] = 255
+                count += 1
+
+    if count == 0:
+        return None
+
+    mask_img = Image.frombytes("L", (w, h), bytes(mask_bytes))
+    mask_name = f"btn{button_index + 1}_mask.png"
+    mask_path = output_dir / mask_name
+    mask_img.save(mask_path)
+    return mask_path
+
+
 def _filter_rect_outliers_by_size(
     rects_with_pages: list[tuple[int, tuple[int, int, int, int]]],
 ) -> list[tuple[int, tuple[int, int, int, int]]]:
@@ -2390,6 +2456,7 @@ def run(
     fallback_rects: dict[str, list[tuple[int, int, int, int]]] = {}
     fallback_entries: set[str] = set()  # Track entries using fallback rects
     button_frame_map: dict[str, dict[int, Path]] = {}  # menu_id -> button_index -> frame_path
+    button_mask_map: dict[str, dict[int, Path]] = {}  # menu_id -> button_index -> mask_path
     btn_it_analysis: dict[str, MenuPageAnalysis] = {}  # menu_id -> BTN_IT page analysis
     button_to_page: dict[str, dict[int, int]] = {}  # menu_id -> button_idx -> page_num
     menu_expected_counts: dict[str, int] = {}
@@ -2438,7 +2505,7 @@ def run(
                     )
                 
                 # NEW: Try multi-page detection first for better page 2+ coverage
-                multipage_map = _detect_menu_rects_multi_page(
+                multipage_map, multipage_masks = _detect_menu_rects_multi_page(
                     vob_path, output_dir, expected=len(menu_entries), sample_interval=3.0
                 )
                 
@@ -2448,10 +2515,13 @@ def run(
                     logger.info(f"menu_images: multi-page detection found {len(multipage_map)} buttons for {menu_id}")
                     # Extract rects and store frame mappings
                     button_frame_map[menu_id] = {}
+                    button_mask_map[menu_id] = {}
                     for btn_idx in sorted(multipage_map.keys()):
                         frame_path, rect = multipage_map[btn_idx]
                         rects.append(rect)
                         button_frame_map[menu_id][btn_idx] = frame_path
+                        if btn_idx in multipage_masks:
+                            button_mask_map[menu_id][btn_idx] = multipage_masks[btn_idx]
                         logger.info(f"    Button {btn_idx}: {rect} from {frame_path.name}")
                 else:
                     # Fallback to single-frame detection
@@ -2750,10 +2820,18 @@ def run(
         if crop_rect is not None and entry.entry_id not in fallback_entries:
             # Only track non-fallback rects for overlap checking
             used_rects.setdefault(menu_id, []).append((entry.entry_id, crop_rect))
+
+        mask_path_str = None
+        if button_index is not None and menu_id in button_mask_map:
+            mp = button_mask_map.get(menu_id, {})
+            if button_index in mp:
+                mask_path_str = str(mp[button_index])
+
         entries.append(
             MenuImageEntry(
                 entry_id=entry.entry_id,
                 image_path=str(dst),
+                mask_path=mask_path_str,
                 menu_id=entry.menu_id,
                 selection_rect=entry.selection_rect,
                 highlight_rect=entry.highlight_rect,

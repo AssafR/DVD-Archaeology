@@ -113,6 +113,7 @@ class MenuImageEntry(BaseModel):
 
     entry_id: str
     image_path: str
+    mask_path: str | None = None
     menu_id: str | None = None
     selection_rect: RectModel | None = None
     highlight_rect: RectModel | None = None

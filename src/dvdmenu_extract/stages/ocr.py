@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 import logging
 import re
+from math import inf
 
 from dvdmenu_extract.models.menu import MenuImagesModel
 from dvdmenu_extract.models.ocr import OcrEntryModel, OcrModel
@@ -97,6 +98,116 @@ def _run_stub(
     return OcrModel(results=entries)
 
 
+def _text_quality_score(text: str) -> float:
+    """
+    Heuristic quality score for OCR output.
+    
+    Higher score = more alpha/number characters and fewer artifacts.
+    Returns 0.0 for empty strings.
+    """
+    if not text:
+        return 0.0
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?'-()")
+    allowed_count = sum(1 for ch in text if ch in allowed)
+    alpha_num_count = sum(ch.isalnum() for ch in text)
+    length = len(text)
+    return (allowed_count / length) * 0.6 + (alpha_num_count / length) * 0.4
+
+
+def _make_color_dominant_mask(rgb_img):
+    """
+    Build a mask for the most chromatically dominant text-like hue on the image.
+    
+    This is color-agnostic (no hard-coded blue). It finds the hue with the
+    highest weighted energy (saturation * value), then keeps pixels in that hue
+    band that are both saturated and bright. Intended to capture SPU overlay
+    glyphs rendered in a distinct color over textured backgrounds.
+    
+    Returns None if no meaningful dominant hue region is found.
+    """
+    from PIL import Image, ImageFilter
+
+    hsv = rgb_img.convert("HSV")
+    data = list(hsv.getdata())  # (h, s, v) 0-255
+
+    # Build weighted hue histogram (weight = s * v)
+    weights = [0] * 256
+    for h, s, v in data:
+        w = s * v
+        if w:
+            weights[h] += w
+
+    # Find dominant hue
+    dominant_hue = max(range(256), key=lambda i: weights[i])
+    if weights[dominant_hue] == 0:
+        return None
+
+    # Build mask: pixels near dominant hue, sufficiently saturated/bright
+    hue_band = 10  # +/- band around dominant hue
+    mask_bytes = bytearray()
+    count = 0
+    sat_thresh = 80
+    val_thresh = 80
+    for h, s, v in data:
+        dh = min((h - dominant_hue) % 256, (dominant_hue - h) % 256)
+        if dh <= hue_band and s >= sat_thresh and v >= val_thresh:
+            mask_bytes.append(255)
+            count += 1
+        else:
+            mask_bytes.append(0)
+
+    if count < 20:  # not enough pixels -> treat as no mask
+        return None
+
+    mask_pil = Image.frombytes("L", rgb_img.size, bytes(mask_bytes))
+    # Smooth small gaps while keeping strokes thin
+    mask_pil = mask_pil.filter(ImageFilter.MaxFilter(3))
+    mask_pil = mask_pil.filter(ImageFilter.MinFilter(3))
+
+    # Smooth small gaps while keeping strokes thin
+    mask_pil = mask_pil.filter(ImageFilter.MaxFilter(3))
+    mask_pil = mask_pil.filter(ImageFilter.MinFilter(3))
+    return mask_pil
+
+
+def _preprocess_for_tesseract(img, mask=None, *, scale: int = 2, thicken: bool = False):
+    """
+    Shared preprocessing used by both unmasked and masked passes.
+    If mask is provided, non-mask areas are set to white before processing.
+    """
+    from PIL import ImageOps, ImageFilter, ImageStat, Image
+
+    if mask is not None:
+        # Use a mask-driven binary image: text where mask=1, white elsewhere.
+        text_only = Image.new("L", img.size, 255)
+        text_only.paste(0, mask=mask)
+        img = text_only
+    else:
+        img = img.convert("L")
+
+    # Upscale (default 2x; masked path may use 3x)
+    img = img.resize((img.width * scale, img.height * scale), Image.BICUBIC)
+
+    # Optional text thickening for masked path to restore stroke weight
+    if thicken:
+        img = img.filter(ImageFilter.MaxFilter(3))
+
+    # Contrast and sharpen
+    img = ImageOps.autocontrast(img)
+    img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=180, threshold=2))
+
+    # Adaptive binarization
+    mean = ImageStat.Stat(img).mean[0]
+    threshold = max(120, min(200, mean + 20))
+    img = img.point(lambda p: 255 if p > threshold else 0)
+    return img
+
+
+def _run_tesseract(img, ocr_lang: str, config: str):
+    import pytesseract
+    return pytesseract.image_to_string(img, lang=ocr_lang, config=config).strip()
+
+
 def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
     try:
         import pytesseract
@@ -128,46 +239,11 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         if Path(tesseract_exe).is_file():
             pytesseract.pytesseract.tesseract_cmd = tesseract_exe
 
-        # Load image and perform OCR
-        img = Image.open(image_path)
-
-        # OCR Preprocessing Pipeline for DVD Menu Text
-        # =============================================
-        # This multi-stage preprocessing optimizes small, low-contrast DVD menu text
-        # for Tesseract OCR. Each step addresses specific OCR challenges.
+        # Load image (keep RGB for color-aware masking)
+        orig_rgb = Image.open(image_path).convert("RGB")
         
-        # 1. GRAYSCALE CONVERSION
-        # Convert to single-channel grayscale for consistent processing
-        img = img.convert("L")
-        
-        # 2. UPSCALING (2x Magnification via Bicubic Interpolation)
-        # Rationale: DVD menu text is typically small (12-16px). Tesseract performs
-        # better on larger text (30-40px). 2x upscaling provides optimal balance:
-        # - Improves character recognition for small fonts
-        # - Preserves character edges without over-sharpening artifacts
-        # - Faster than 3x/4x while maintaining accuracy
-        # Testing Note: 3x magnification was tested but caused regressions
-        # (breaking up "C370" → "C 3/0", "77" → "17"). 2x is the sweet spot.
-        img = img.resize((img.width * 2, img.height * 2), Image.BICUBIC)
-        
-        # 3. AUTO CONTRAST ENHANCEMENT
-        # Normalize brightness range to maximize text/background contrast
-        img = ImageOps.autocontrast(img)
-        
-        # 4. UNSHARP MASKING (Edge Sharpening)
-        # Enhances character edges for clearer recognition
-        # - radius=1.2: Small radius for fine detail
-        # - percent=180: Strong sharpening (180% of edge difference)
-        # - threshold=2: Apply to all but nearly-flat regions
-        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=180, threshold=2))
-        
-        # 5. ADAPTIVE BINARIZATION (Black & White Thresholding)
-        # Convert to pure black text on white background for optimal OCR
-        # Threshold calculation: mean brightness + 20, clamped to [120, 200]
-        # This adapts to varying menu background brightness levels
-        mean = ImageStat.Stat(img).mean[0]
-        threshold = max(120, min(200, mean + 20))
-        img = img.point(lambda p: 255 if p > threshold else 0)
+        # Primary path: existing grayscale pipeline
+        img_primary = _preprocess_for_tesseract(orig_rgb, scale=2, thicken=False)
 
         # Tesseract OCR Configuration
         # ============================
@@ -188,19 +264,59 @@ def _run_real(menu_images: MenuImagesModel, ocr_lang: str) -> OcrModel:
         #   no negative side effects.
         config = "--psm 7 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
         
-        raw_text = pytesseract.image_to_string(
-            img, lang=ocr_lang, config=config
-        ).strip()
-        
-        # Fallback: If PSM 7 produces empty result, try PSM 6
-        # PSM 6 (uniform text block) is more lenient and may succeed where
-        # PSM 7's strict single-line mode fails (e.g., unexpected layouts)
-        if not raw_text:
-            config = "--psm 6 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
-            raw_text = pytesseract.image_to_string(
-                img, lang=ocr_lang, config=config
-            ).strip()
-        raw_text = _cleanup_ocr_text(raw_text)
+        raw_text_primary = _run_tesseract(img_primary, ocr_lang, config)
+        if not raw_text_primary:
+            config_fallback = "--psm 6 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
+            raw_text_primary = _run_tesseract(img_primary, ocr_lang, config_fallback)
+        raw_text_primary = _cleanup_ocr_text(raw_text_primary)
+
+        # Secondary path: provided SPU mask (if present) to suppress background.
+        raw_text_masked_spu = ""
+        provided_mask = None
+        if image.mask_path:
+            mask_path = Path(image.mask_path)
+            if mask_path.is_file():
+                try:
+                    provided_mask = Image.open(mask_path).convert("L")
+                except Exception:
+                    provided_mask = None
+        if provided_mask is not None:
+            img_masked_spu = _preprocess_for_tesseract(orig_rgb, mask=provided_mask, scale=3, thicken=True)
+            masked_text = _run_tesseract(img_masked_spu, ocr_lang, config)
+            if not masked_text:
+                config_fallback = "--psm 6 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
+                masked_text = _run_tesseract(img_masked_spu, ocr_lang, config_fallback)
+            raw_text_masked_spu = _cleanup_ocr_text(masked_text)
+
+        # Tertiary path: color-aware dominant-hue mask to suppress textured backgrounds.
+        raw_text_masked_hue = ""
+        mask = _make_color_dominant_mask(orig_rgb)
+        if mask is not None:
+            img_masked = _preprocess_for_tesseract(orig_rgb, mask=mask, scale=3, thicken=True)
+            masked_text = _run_tesseract(img_masked, ocr_lang, config)
+            if not masked_text:
+                config_fallback = "--psm 6 -c preserve_interword_spaces=1 -c tessedit_char_blacklist=|"
+                masked_text = _run_tesseract(img_masked, ocr_lang, config_fallback)
+            raw_text_masked_hue = _cleanup_ocr_text(masked_text)
+
+        # Choose best candidate:
+        # 1) If SPU-derived text exists, prefer it (authoritative overlay).
+        # 2) Else, pick hue-masked if it improves quality over primary.
+        # 3) Else, fallback to primary.
+        chosen_text = raw_text_primary
+        chosen_source = "primary"
+
+        if raw_text_masked_spu:
+            chosen_text = raw_text_masked_spu
+            chosen_source = "spu"
+        elif raw_text_masked_hue:
+            hue_score = _text_quality_score(raw_text_masked_hue)
+            primary_score = _text_quality_score(raw_text_primary)
+            if hue_score > primary_score + 0.01:
+                chosen_text = raw_text_masked_hue
+                chosen_source = "hue"
+
+        raw_text = chosen_text
         logging.info("OCR Result: %s", raw_text)
 
         spu_text_nonempty = False
