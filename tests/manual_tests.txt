@@ -1,3 +1,12 @@
+Possible regerssion source dirs:
+Q:\Old_Discs\1926 - SNL 2008 - Seth Rogan, Jon Bon Jovi, Brian Williams, Tina Fey, Ellen Page - DVD
+Q:\DVDs\UglyBetty_s01b
+Q:\DVD\Ellen_Season_04\VIDEO_TS
+Q:\DVDs\0898_Entourage_Nanny-Kibbutz_Garber_Emmy2005\
+
+
+
+
 uv run pytest tests/test_external_reference_compare.py -k reference --reference-verbose --reference-skip-extract -s
 uv run dvdmenu-extract "Q:\DVDs\UglyBetty_s01b" --out Q:\DVDs\UglyBetty_s01b\chapters  --until extract --use-real-ffmpeg --force  
 

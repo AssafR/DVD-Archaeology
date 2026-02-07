@@ -20,6 +20,126 @@ from dvdmenu_extract.util.libdvdread_compat import (
 from dvdmenu_extract.util.libdvdread_spu import find_spu_button_rects, iter_spu_packets
 
 
+def _pgc_button_table_sane(data: bytes, pgc_start: int) -> bool:
+    """Lightweight structural check that a PGC's button table is in-bounds and non-empty.
+
+    This mirrors the offsets used in _parse_pgc_buttons but avoids allocating structures.
+    """
+    # Button table offset: prefer common offsets, stop at first non-zero
+    btn_tab_rel = 0
+    for rel_off in (0x00E6, 0x00EA, 0x00E4):
+        candidate = _read_u16(data, pgc_start + rel_off)
+        if candidate != 0:
+            btn_tab_rel = candidate
+            break
+    if btn_tab_rel == 0:
+        return False
+    btn_tab_start = pgc_start + btn_tab_rel
+    if btn_tab_start + 6 > len(data):
+        return False
+    group_offsets = [
+        _read_u16(data, btn_tab_start + 2),
+        _read_u16(data, btn_tab_start + 4),
+        _read_u16(data, btn_tab_start + 6),
+    ]
+    group_rel = next((offset for offset in group_offsets if offset != 0), 0)
+    if group_rel == 0:
+        return False
+    group_start = btn_tab_start + group_rel
+    if group_start + 2 > len(data):
+        return False
+    nb_btn = _read_u16(data, group_start)
+    return nb_btn > 0
+
+
+def _validate_pgc_table(
+    data: bytes, pgc_table_start: int, nb_pgc: int, ifo_path: Path, stage: str
+) -> list[int]:
+    """Validate the PGC table layout and return in-bounds PGC starts.
+
+    Checks:
+    - Table fits in file (header + entry list).
+    - Each PGC offset is in-bounds, monotonic, and has the minimum header size.
+    - At least one PGC exposes a non-empty, in-bounds button table.
+    """
+    logger = logging.getLogger(__name__)
+    pgc_starts: list[int] = []
+
+    table_end = pgc_table_start + 8 + nb_pgc * 8
+    if table_end > len(data):
+        logger.warning(
+            "nav_parse: %s %s pgc_table exceeds file (end=0x%X len=0x%X nb_pgc=%d)",
+            ifo_path.name,
+            stage,
+            table_end,
+            len(data),
+            nb_pgc,
+        )
+        return pgc_starts
+
+    last_start = pgc_table_start
+    sane_button_table_found = False
+    for pgc_idx in range(nb_pgc):
+        entry = pgc_table_start + 8 + (pgc_idx * 8)
+        pgc_rel = _read_u32(data, entry + 4)
+        if pgc_rel == 0:
+            continue
+        pgc_start = pgc_table_start + pgc_rel
+        if pgc_start <= pgc_table_start or pgc_start >= len(data):
+            logger.debug(
+                "nav_parse: %s %s pgc%d start out of bounds (0x%X)",
+                ifo_path.name,
+                stage,
+                pgc_idx + 1,
+                pgc_start,
+            )
+            continue
+        if pgc_start < last_start:
+            logger.debug(
+                "nav_parse: %s %s pgc%d start not monotonic (0x%X < 0x%X)",
+                ifo_path.name,
+                stage,
+                pgc_idx + 1,
+                pgc_start,
+                last_start,
+            )
+            continue
+        if pgc_start + 0x00EC > len(data):
+            logger.debug(
+                "nav_parse: %s %s pgc%d header truncated (0x%X > len 0x%X)",
+                ifo_path.name,
+                stage,
+                pgc_idx + 1,
+                pgc_start + 0x00EC,
+                len(data),
+            )
+            continue
+        if _pgc_button_table_sane(data, pgc_start):
+            sane_button_table_found = True
+        pgc_starts.append(pgc_start)
+        last_start = pgc_start
+
+    if not pgc_starts:
+        logger.warning(
+            "nav_parse: %s %s no usable PGC entries (nb_pgc=%d)",
+            ifo_path.name,
+            stage,
+            nb_pgc,
+        )
+        return pgc_starts
+
+    if not sane_button_table_found:
+        logger.warning(
+            "nav_parse: %s %s PGC table has no sane button tables (nb_pgc=%d)",
+            ifo_path.name,
+            stage,
+            nb_pgc,
+        )
+        return []
+
+    return pgc_starts
+
+
 @dataclass
 class DvdIfoCell:
     cell_id: int
@@ -224,6 +344,26 @@ def _parse_vtsm_navpack_buttons(
     if nb_pgc == 0:
         return []
 
+    pgc_starts = _validate_pgc_table(
+        data=data,
+        pgc_table_start=pgc_table_start,
+        nb_pgc=nb_pgc,
+        ifo_path=ifo_path,
+        stage="VTSM spu",
+    )
+    if not pgc_starts:
+        return []
+
+    pgc_starts = _validate_pgc_table(
+        data=data,
+        pgc_table_start=pgc_table_start,
+        nb_pgc=nb_pgc,
+        ifo_path=ifo_path,
+        stage="VTSM navpack",
+    )
+    if not pgc_starts:
+        return []
+
     c_adt = parse_vtsm_c_adt(ifo_path)
     vobu_admap = parse_vts_vobu_admap(ifo_path, 0x00DC)
     vob_map = _build_menu_vob_sector_map(video_ts, title_id)
@@ -236,16 +376,16 @@ def _parse_vtsm_navpack_buttons(
     if c_adt:
         default_sector_range = next(iter(c_adt.values()))
     vob_end = max(end for _, _, end in vob_map)
-    for pgc_idx in range(nb_pgc):
-        entry = pgc_table_start + 8 + (pgc_idx * 8)
-        if entry + 8 > len(data):
+    start_time = time.monotonic()
+    for idx, pgc_start in enumerate(pgc_starts, start=1):
+        if time.monotonic() - start_time > 30.0:
+            logging.getLogger(__name__).warning(
+                "nav_parse: %s VTSM navpack scan exceeded 30s, stopping (scanned %d/%d pgc)",
+                ifo_path.name,
+                idx - 1,
+                len(pgc_starts),
+            )
             break
-        pgc_rel = _read_u32(data, entry + 4)
-        if pgc_rel == 0:
-            continue
-        pgc_start = pgc_table_start + pgc_rel
-        if pgc_start + 0x00EC > len(data):
-            continue
         cell_pos_rel = _read_u16(data, pgc_start + 0x00EA)
         sector_range = None
         if cell_pos_rel != 0:
@@ -267,7 +407,7 @@ def _parse_vtsm_navpack_buttons(
         )
         if not rects:
             continue
-        menu_id = f"VTSM_{title_id:02d}_pgc{pgc_idx + 1:02d}"
+        menu_id = f"VTSM_{title_id:02d}_pgc{idx:02d}"
         for rect in rects:
             x1, y1, x2, y2 = rect
             buttons.append(
@@ -465,6 +605,16 @@ def _parse_vtsm_spu_buttons(
     if nb_pgc == 0:
         return []
 
+    pgc_starts = _validate_pgc_table(
+        data=data,
+        pgc_table_start=pgc_table_start,
+        nb_pgc=nb_pgc,
+        ifo_path=ifo_path,
+        stage="VTSM spu",
+    )
+    if not pgc_starts:
+        return []
+
     c_adt = parse_vtsm_c_adt(ifo_path)
     vobu_admap = parse_vts_vobu_admap(ifo_path, 0x00DC)
     vob_map = _build_menu_vob_sector_map(video_ts, title_id)
@@ -497,16 +647,7 @@ def _parse_vtsm_spu_buttons(
         denom = min(_rect_area(a), _rect_area(b))
         return (inter / denom) if denom else 0.0
 
-    for pgc_idx in range(nb_pgc):
-        entry = pgc_table_start + 8 + (pgc_idx * 8)
-        if entry + 8 > len(data):
-            break
-        pgc_rel = _read_u32(data, entry + 4)
-        if pgc_rel == 0:
-            continue
-        pgc_start = pgc_table_start + pgc_rel
-        if pgc_start + 0x00EC > len(data):
-            continue
+    for pgc_idx, pgc_start in enumerate(pgc_starts):
         cell_pos_rel = _read_u16(data, pgc_start + 0x00EA)
         sector_range = None
         if cell_pos_rel != 0:

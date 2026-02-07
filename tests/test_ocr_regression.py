@@ -90,6 +90,16 @@ def _text_similarity(text1: str, text2: str) -> float:
     return difflib.SequenceMatcher(None, normalized1, normalized2).ratio()
 
 
+def _normalize_for_exact(text: str) -> str:
+    """Normalize text for exact-match accounting: collapse whitespace and lowercase."""
+    return " ".join(text.split()).lower()
+
+
+def _normalize_for_exact(text: str) -> str:
+    """Normalize text for exact-match accounting: collapse whitespace and lowercase."""
+    return " ".join(text.split()).lower()
+
+
 def _get_datasets_dir() -> Path:
     """Get the OCR regression datasets directory."""
     return Path(__file__).resolve().parent / "fixtures" / "ocr_regression"
@@ -198,6 +208,7 @@ def _generate_test_report(
     dataset: dict[str, Any],
     results: list[dict[str, Any]],
     output_dir: Path,
+    suite_root: Path | None = None,
 ) -> None:
     """
     Generate detailed test report in JSON and Markdown formats.
@@ -216,6 +227,8 @@ def _generate_test_report(
     passing = sum(1 for r in results if r["passed"])
     failing = total_buttons - passing
     avg_similarity = sum(r["similarity"] for r in results) / total_buttons if results else 0
+    exact_matches = sum(1 for r in results if r.get("exact_match"))
+    mismatches = total_buttons - exact_matches
     
     # JSON Report
     json_report = {
@@ -228,6 +241,8 @@ def _generate_test_report(
             "failing": failing,
             "pass_rate": passing / total_buttons if total_buttons else 0,
             "average_similarity": avg_similarity,
+            "exact_matches": exact_matches,
+            "mismatches": mismatches,
         },
         "results": results,
         "dataset": dataset,
@@ -245,6 +260,8 @@ def _generate_test_report(
         f"**Total Buttons**: {total_buttons}",
         f"**Pass Rate**: {passing}/{total_buttons} ({passing/total_buttons*100:.1f}%)",
         f"**Average Similarity**: {avg_similarity:.2%}",
+        f"**Exact Matches**: {exact_matches}",
+        f"**Non-exact (differences)**: {mismatches}",
         f"",
         f"## Summary",
         f"",
@@ -283,6 +300,75 @@ def _generate_test_report(
     
     md_path = output_dir / f"ocr_report_{disc_name.replace(' ', '_').lower()}.md"
     md_path.write_text("\n".join(md_lines), encoding="utf-8")
+
+    if suite_root is not None:
+        _append_suite_summary(suite_root, json_report)
+
+
+def _append_suite_summary(suite_root: Path, dataset_report: dict[str, Any]) -> None:
+    """
+    Append or update a suite-level aggregate report combining all parametrized datasets in this run.
+
+    Writes JSON and Markdown to suite_root (the parent of each dataset's output_dir).
+    """
+    suite_root.mkdir(parents=True, exist_ok=True)
+    json_path = suite_root / "ocr_suite_report.json"
+    md_path = suite_root / "ocr_suite_report.md"
+
+    if json_path.is_file():
+        aggregate = json.loads(json_path.read_text(encoding="utf-8"))
+    else:
+        aggregate = {"datasets": []}
+
+    # Replace/update entry by disc_name
+    datasets_by_name = {d["disc_name"]: d for d in aggregate.get("datasets", [])}
+    datasets_by_name[dataset_report["disc_name"]] = dataset_report
+    aggregate["datasets"] = list(datasets_by_name.values())
+
+    # Recompute suite totals
+    total_buttons = sum(d["summary"].get("total_buttons", 0) for d in aggregate["datasets"])
+    total_passing = sum(d["summary"].get("passing", 0) for d in aggregate["datasets"])
+    total_exact = sum(d["summary"].get("exact_matches", 0) for d in aggregate["datasets"])
+    avg_sims = [
+        d["summary"].get("average_similarity", 0.0)
+        for d in aggregate["datasets"]
+        if "summary" in d
+    ]
+    aggregate["summary"] = {
+        "dataset_count": len(aggregate["datasets"]),
+        "total_buttons": total_buttons,
+        "total_passing": total_passing,
+        "total_exact_matches": total_exact,
+        "average_of_averages": (sum(avg_sims) / len(avg_sims)) if avg_sims else 0.0,
+    }
+
+    json_path.write_text(json.dumps(aggregate, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # Markdown summary
+    lines = [
+        "# OCR Regression Suite Report",
+        "",
+        f"**Datasets**: {aggregate['summary']['dataset_count']}",
+        f"**Total Buttons**: {aggregate['summary']['total_buttons']}",
+        f"**Passing Buttons**: {aggregate['summary']['total_passing']}",
+        f"**Exact Matches**: {aggregate['summary']['total_exact_matches']}",
+        f"**Average of Dataset Averages**: {aggregate['summary']['average_of_averages']:.2%}",
+        "",
+        "## Datasets",
+        "",
+        "| Dataset | Buttons | Passing | Exact | Avg Similarity | Pass Rate |",
+        "|---------|---------|---------|-------|----------------|-----------|",
+    ]
+    for d in sorted(aggregate["datasets"], key=lambda x: x["disc_name"]):
+        s = d["summary"]
+        pass_rate = s["passing"] / s["total_buttons"] if s.get("total_buttons") else 0
+        lines.append(
+            f"| {d['disc_name']} | {s['total_buttons']} | {s['passing']} | {s.get('exact_matches', 0)} | "
+            f"{s['average_similarity']:.2%} | {pass_rate:.2%} |"
+        )
+
+    md_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"Suite summary updated at {md_path}")
 
 
 def _run_ocr_regression_test(
@@ -387,6 +473,7 @@ def _run_ocr_regression_test(
         # Calculate similarity
         similarity = _text_similarity(expected_text, actual_text)
         passed = similarity >= button_threshold
+        exact_match = _normalize_for_exact(expected_text) == _normalize_for_exact(actual_text)
         
         # Collect result
         notes = known_issue["issue"] if known_issue else ""
@@ -398,6 +485,7 @@ def _run_ocr_regression_test(
             "passed": passed,
             "threshold": button_threshold,
             "notes": notes,
+            "exact_match": exact_match,
         })
         
         # Track failures
@@ -413,7 +501,18 @@ def _run_ocr_regression_test(
             failures.append(failure_detail)
     
     # Generate detailed reports
-    _generate_test_report(dataset, comparison_results, output_path)
+    _generate_test_report(
+        dataset=dataset,
+        results=comparison_results,
+        output_dir=output_path,
+        suite_root=output_path.parent,
+    )
+    # Non-intrusive notice for humans running tests interactively.
+    report_stem = dataset["disc_name"].replace(" ", "_").lower()
+    print(f"OCR report written to {output_path / f'ocr_report_{report_stem}.md'}")
+    suite_report_md = output_path.parent / "ocr_suite_report.md"
+    if suite_report_md.is_file():
+        print(f"Suite summary updated at {suite_report_md}")
     
     # Report all failures at once
     if failures:

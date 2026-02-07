@@ -194,7 +194,16 @@ Stage G: menu_images
        * Button from SPU packet 1 (page 0) → frame group 1
        * Button from SPU packet 2 (page 1) → frame group 2
   
-  6. Expand for text labels:
+  6. Split rows into columns (text-based SPU layouts):
+     - Convert rects into Y-bands and attempt to split each band into left/right columns.
+     - Build a horizontal projection from character-level components (preferred) or
+       clustered band rects, smooth it, and split only if the valley is deep/wide enough.
+     - If the valley is weak, use a gap-based split between component clusters.
+     - Keep wide header rows single; otherwise produce 1–2 rects per band.
+     - Order output by visual layout: header, then left column top-down, then right column.
+     - When reordering rects, re-map SPU frame/mask indices to keep masks aligned.
+
+  7. Expand for text labels:
      - Horizontal expansion: 3-4× original width to right
      - Captures text positioned adjacent to thumbnail
   ```

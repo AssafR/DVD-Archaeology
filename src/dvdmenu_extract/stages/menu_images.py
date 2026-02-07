@@ -199,7 +199,15 @@ def _connected_components(mask: Image.Image) -> list[tuple[int, int, int, int]]:
                             visited[ny][nx] = True
                             stack.append((nx, ny))
             rects.append((min_x, min_y, max_x, max_y))
-    return rects
+    # Clamp rects to frame bounds to avoid invalid crop coordinates.
+    clamped: list[tuple[int, int, int, int]] = []
+    for x1, y1, x2, y2 in rects:
+        x1c = max(0, min(width - 1, x1))
+        y1c = max(0, min(height - 1, y1))
+        x2c = max(x1c, min(width - 1, x2))
+        y2c = max(y1c, min(height - 1, y2))
+        clamped.append((x1c, y1c, x2c, y2c))
+    return clamped
 
 
 def _detect_menu_rects_from_video(
@@ -954,6 +962,7 @@ def _extract_spu_button_rects(
         large_components = [r for r in rects if (r[2] - r[0]) >= 80 and (r[3] - r[1]) >= 60]
         
         page_rects = []
+        component_rects_for_split: list[tuple[int, int, int, int]] | None = None
         
         if len(small_components) > 20 and not large_components:
             # Likely character-level SPU (e.g., Friends, Ellen)
@@ -1037,6 +1046,7 @@ def _extract_spu_button_rects(
             
             logger.info(f"    Clustered {len(small_components)} characters → {len(clustered_rects)} buttons")
             page_rects = clustered_rects
+            component_rects_for_split = small_components
             
             for idx, rect in enumerate(clustered_rects):
                 w, h = rect[2] - rect[0], rect[3] - rect[1]
@@ -1066,7 +1076,236 @@ def _extract_spu_button_rects(
                 )
                 page_rects = text_rects
 
+        def _split_rows_into_columns(
+            rects: list[tuple[int, int, int, int]],
+            frame_w: int,
+            component_rects: list[tuple[int, int, int, int]] | None = None,
+        ) -> list[tuple[int, int, int, int]]:
+            """Turn SPU rects into row bands, then split each band into 1 or 2 column rects.
+            
+            - Wide rows (span >=70% of width) stay single (good for Ellen and DrWho header).
+            - Other rows are split into two columns using a valley in horizontal density.
+              The projection is computed from character-level components when available,
+              which preserves the gutter even when clustered button rects span the full row.
+            - If the valley is weak, fall back to a gap-based split on component clusters.
+            - Does not depend on expected count.
+            """
+            if not rects:
+                return []
+            height = max(r[3] for r in rects) + 1
+            proj = [0] * height
+            for x1, y1, x2, y2 in rects:
+                for y in range(y1, y2 + 1):
+                    proj[y] += max(1, x2 - x1 + 1)
+            mean_proj = sum(proj) / len(proj)
+            band_thresh = max(int(mean_proj * 1.2), 20)
+            bands: list[tuple[int, int]] = []
+            in_band = False
+            start = 0
+            for y, val in enumerate(proj):
+                if val > band_thresh and not in_band:
+                    start = y
+                    in_band = True
+                elif val <= band_thresh and in_band:
+                    end = y - 1
+                    if end - start >= 6:
+                        bands.append((start, end))
+                    in_band = False
+            if in_band:
+                end = len(proj) - 1
+                if end - start >= 6:
+                    bands.append((start, end))
+
+            # Split very tall bands to avoid merging multiple rows
+            def _split_band(y1: int, y2: int) -> list[tuple[int, int]]:
+                sub: list[tuple[int, int]] = []
+                gap_thresh = max(int(band_thresh * 0.45), 15)
+                active = None
+                for y in range(y1, y2 + 1):
+                    if proj[y] > gap_thresh:
+                        if active is None:
+                            active = [y, y]
+                        else:
+                            active[1] = y
+                    else:
+                        if active and active[1] - active[0] >= 6:
+                            sub.append((active[0], active[1]))
+                        active = None
+                if active and active[1] - active[0] >= 6:
+                    sub.append((active[0], active[1]))
+                return sub
+
+            split_bands: list[tuple[int, int]] = []
+            for y1, y2 in bands:
+                if (y2 - y1) > 60:
+                    split_bands.extend(_split_band(y1, y2))
+                else:
+                    split_bands.append((y1, y2))
+            bands = split_bands
+
+            final_rects: list[tuple[int, int, int, int]] = []
+            for y1, y2 in bands:
+                comps = [(x1, yy1, x2, yy2) for (x1, yy1, x2, yy2) in rects if not (yy2 < y1 or yy1 > y2)]
+                if not comps:
+                    continue
+                # Prefer character-level components for column splitting when available.
+                band_sources = comps
+                band_components: list[tuple[int, int, int, int]] = []
+                if component_rects:
+                    band_components = [
+                        (x1, yy1, x2, yy2)
+                        for (x1, yy1, x2, yy2) in component_rects
+                        if not (yy2 < y1 or yy1 > y2)
+                    ]
+                    if band_components:
+                        band_sources = band_components
+
+                x_min = max(0, min(c[0] for c in band_sources))
+                x_max = min(frame_w - 1, max(c[2] for c in band_sources))
+                span_w = x_max - x_min + 1
+
+                # Wide row: keep single only for the top-most band (header); all other rows may be split via valley analysis.
+                is_header = (final_rects == []) and (y1 < (height * 0.25)) and (span_w >= frame_w * 0.5)
+                if is_header:
+                    final_rects.append((max(0, x_min - 4), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3))
+                    continue
+
+                # Build a horizontal projection across this band from the component coverage.
+                x_proj = [0] * frame_w
+                for cx1, cy1, cx2, cy2 in band_sources:
+                    # Clamp to frame bounds before projection to avoid overruns.
+                    cx1c = max(0, min(frame_w - 1, cx1))
+                    cx2c = max(cx1c, min(frame_w - 1, cx2))
+                    oy1 = max(cy1, y1)
+                    oy2 = min(cy2, y2)
+                    if oy2 < oy1:
+                        continue
+                    overlap_h = oy2 - oy1 + 1
+                    for x in range(cx1c, cx2c + 1):
+                        x_proj[x] += overlap_h
+
+                # Smooth to reduce narrow spikes.
+                window = 9
+                half = window // 2
+                smoothed: list[float] = []
+                for x in range(frame_w):
+                    start_x = max(0, x - half)
+                    end_x = min(frame_w, x + half + 1)
+                    smoothed.append(sum(x_proj[start_x:end_x]) / max(1, (end_x - start_x)))
+
+                # Find the strongest valley between x_min and x_max.
+                if x_max - x_min < 4:
+                    final_rects.append((max(0, x_min - 4), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3))
+                    continue
+                local_slice = smoothed[x_min : x_max + 1]
+                valley_offset = min(range(len(local_slice)), key=lambda idx: local_slice[idx])
+                valley_x = x_min + valley_offset
+
+                left_slice = local_slice[:valley_offset]
+                right_slice = local_slice[valley_offset + 1 :]
+                left_peak = max(left_slice) if left_slice else 0
+                right_peak = max(right_slice) if right_slice else 0
+                peak = max(left_peak, right_peak)
+                valley_val = local_slice[valley_offset]
+                depth = (peak - valley_val) / max(1.0, peak)
+
+                # Gutter width: consecutive samples near the valley minimum.
+                gutter = 1
+                tol = valley_val * 1.1
+                l = valley_x - 1
+                while l >= 0 and smoothed[l] <= tol:
+                    gutter += 1
+                    l -= 1
+                r = valley_x + 1
+                while r < frame_w and smoothed[r] <= tol:
+                    gutter += 1
+                    r += 1
+
+                abs_gutter_min = 12
+                rel_gutter_min = 0.05
+                depth_thresh = 0.4
+                min_half_px = 40
+                min_half_rel = 0.12
+
+                half_left = valley_x - x_min + 1
+                half_right = x_max - valley_x
+                gutter_ok = gutter >= max(abs_gutter_min, int((x_max - x_min + 1) * rel_gutter_min))
+                halves_ok = (half_left >= max(min_half_px, int(frame_w * min_half_rel))) and (
+                    half_right >= max(min_half_px, int(frame_w * min_half_rel))
+                )
+
+                if depth >= depth_thresh and gutter_ok and halves_ok:
+                    left_rect = (max(0, x_min - 4), max(0, y1 - 3), max(0, valley_x), y2 + 3)
+                    right_rect = (min(frame_w - 1, valley_x + 1), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3)
+                    final_rects.append(left_rect)
+                    final_rects.append(right_rect)
+                else:
+                    # Fallback: split on a strong component gap when valley is weak.
+                    gap_split_done = False
+                    if band_components:
+                        by_x = sorted(band_components, key=lambda c: c[0])
+                        max_gap = -1
+                        split_at = None
+                        for i in range(len(by_x) - 1):
+                            gap = by_x[i + 1][0] - by_x[i][2] - 1
+                            if gap > max_gap:
+                                max_gap = gap
+                                split_at = (by_x[i][2] + by_x[i + 1][0]) // 2
+                        gap_min_abs = 24
+                        gap_min_rel = 0.06
+                        if split_at is not None and max_gap >= max(gap_min_abs, int(span_w * gap_min_rel)):
+                            left_components = [c for c in by_x if c[2] <= split_at]
+                            right_components = [c for c in by_x if c[0] > split_at]
+                            if len(left_components) >= 3 and len(right_components) >= 3:
+                                half_left = split_at - x_min + 1
+                                half_right = x_max - split_at
+                                if (
+                                    half_left >= max(min_half_px, int(frame_w * min_half_rel))
+                                    and half_right >= max(min_half_px, int(frame_w * min_half_rel))
+                                ):
+                                    left_rect = (max(0, x_min - 4), max(0, y1 - 3), max(0, split_at), y2 + 3)
+                                    right_rect = (min(frame_w - 1, split_at + 1), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3)
+                                    final_rects.append(left_rect)
+                                    final_rects.append(right_rect)
+                                    gap_split_done = True
+
+                    if not gap_split_done:
+                        # No convincing valley/gap -> keep single.
+                        final_rects.append((max(0, x_min - 4), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3))
+
+            ordered_rects: list[tuple[int, int, int, int]] = []
+            header_candidates = [
+                r
+                for r in final_rects
+                if (r[2] - r[0] + 1) >= frame_w * 0.6 and r[1] < (height * 0.3)
+            ]
+            header_rect = (
+                sorted(header_candidates, key=lambda r: (r[1], -(r[2] - r[0])))[0]
+                if header_candidates
+                else None
+            )
+            remaining = [r for r in final_rects if r is not header_rect]
+            center = frame_w // 2
+            left = sorted(
+                [r for r in remaining if ((r[0] + r[2]) / 2) < center],
+                key=lambda r: (r[1], r[0]),
+            )
+            right = sorted(
+                [r for r in remaining if ((r[0] + r[2]) / 2) >= center],
+                key=lambda r: (r[1], r[0]),
+            )
+            if header_rect:
+                ordered_rects.append(header_rect)
+            ordered_rects.extend(left)
+            ordered_rects.extend(right)
+            return ordered_rects
+
         if page_rects:
+            page_rects = _split_rows_into_columns(
+                page_rects,
+                bitmap.width,
+                component_rects=component_rects_for_split,
+            )
             # Sort buttons on this page by vertical position (top to bottom, left to right)
             page_rects.sort(key=lambda r: (r[1], r[0]))
             page_buttons.append((page_index, page_rects))
@@ -1219,36 +1458,83 @@ def _detect_menu_rects_multi_page(
                 )
                 # Regularize heights when a page shows consistent button rows.
                 aligned_rects = _regularize_rect_heights(aligned_rects, frame)
-                aligned_rects_by_page[page_idx] = aligned_rects
+                # Order buttons by Y then X (row-major) to match visual reading order.
+                aligned_rects_by_page[page_idx] = sorted(
+                    aligned_rects, key=lambda r: (r[1], r[0])
+                )
             else:
-                aligned_rects_by_page[page_idx] = rects
+                aligned_rects_by_page[page_idx] = sorted(rects, key=lambda r: (r[1], r[0]))
 
-        # Map each button to the correct frame based on its page index
+        # Build a global row-major ordering from SPU rects (visual order),
+        # then enforce left/right pairing per row. This overrides BTN_IT order
+        # when SPU is present to match on-screen reading order.
+        ordered_spu_rects: list[tuple[int, tuple[int, int, int, int]]] = []
+        for page_idx in sorted(aligned_rects_by_page.keys()):
+            for rect in aligned_rects_by_page[page_idx]:
+                ordered_spu_rects.append((page_idx, rect))
+
+        # Group into rows by Y proximity, then ensure each row has up to two rects (L,R).
+        if ordered_spu_rects:
+            frame_w = max(r[2] for _, r in ordered_spu_rects) + 1
+            y_thresh = 20  # row clustering threshold
+            ordered_spu_rects.sort(key=lambda r: (r[1][1], r[1][0]))
+            rows: list[list[tuple[int, tuple[int, int, int, int]]]] = []
+            for item in ordered_spu_rects:
+                _, rect = item
+                placed = False
+                for row in rows:
+                    # Compare with first rect in row
+                    ry1, ry2 = row[0][1][1], row[0][1][3]
+                    if abs(rect[1] - ry1) <= y_thresh or abs(rect[3] - ry2) <= y_thresh:
+                        row.append(item)
+                        placed = True
+                        break
+                if not placed:
+                    rows.append([item])
+
+            paired: list[tuple[int, tuple[int, int, int, int]]] = []
+            for row in rows:
+                row.sort(key=lambda r: r[1][0])  # left to right
+                if len(row) == 1:
+                    page_idx, rect = row[0]
+                    x1, y1, x2, y2 = rect
+                    center = (x1 + x2) / 2
+                    width = x2 - x1 + 1
+                    # If the single rect is clearly on the right, synthesize a left companion without splitting the right.
+                    if center > frame_w * 0.55:
+                        synth_w = min(max(150, width), frame_w // 2)
+                        left_rect = (max(0, x1 - synth_w), y1, max(0, x1 - 10), y2)
+                        # Validate minimum width
+                        if (left_rect[2] - left_rect[0]) >= 60:
+                            paired.append((page_idx, left_rect))
+                            paired.append((page_idx, rect))
+                        else:
+                            paired.append((page_idx, rect))
+                    else:
+                        paired.append((page_idx, rect))
+                else:
+                    paired.extend(row[:2])  # keep first two (L,R)
+
+            ordered_spu_rects = paired[:expected]
+
+        # Map each ordered rect to frame and mask.
         result: dict[int, tuple[Path, tuple[int, int, int, int]]] = {}
         mask_map: dict[int, Path] = {}
-        page_offsets: dict[int, int] = {}
-        for idx, (page_idx, rect) in enumerate(spu_results[:expected]):
-            rects_for_page = aligned_rects_by_page.get(page_idx, [])
-            offset = page_offsets.get(page_idx, 0)
-            if offset < len(rects_for_page):
-                rect = rects_for_page[offset]
-            page_offsets[page_idx] = offset + 1
+        for idx, (page_idx, rect) in enumerate(ordered_spu_rects):
             if page_idx < len(frame_pages) and frame_pages[page_idx]:
-                frame = frame_pages[page_idx][0]  # Use first frame of the page
+                frame = frame_pages[page_idx][0]
                 result[idx] = (frame, rect)
                 logger.info(f"  Button {idx} (SPU page {page_idx}) -> {frame.name}")
             else:
-                # Fallback to first frame if page not found
                 result[idx] = (extracted_frames[0], rect)
                 logger.warning(f"  Button {idx} (SPU page {page_idx}) -> page not found, using frame 0")
-            
-            # Save SPU-derived mask for this button if we have a bitmap
+
             bitmap = page_bitmaps.get(page_idx)
             if bitmap:
                 mask_path = _save_spu_mask(rect, bitmap, temp_dir, idx)
                 if mask_path:
                     mask_map[idx] = mask_path
-        
+
         return result, mask_map
     
     logger.info(f"menu_images: SPU detection found {len(spu_results)} buttons, expected {expected}")
@@ -1881,7 +2167,160 @@ def _detect_menu_rects_from_static_frame(
     rects = deduped
     rects = rects[:expected]
     rects = sorted(rects, key=lambda r: (r[1], r[0]))
-    return rects, page_bitmaps
+
+    # If we still don't have enough rects (e.g., very bright text on light backgrounds),
+    # fall back to a text-band heuristic: locate rows with high density of dark pixels,
+    # then split into header (wide) and two columns. This is tuned for multi-row menus
+    # like DrWho_s01e01__Confidential_s1 where thumbnail detection misses most buttons.
+    if len(rects) < expected:
+        projection = []
+        for y in range(height):
+            row_dark = 0
+            for x in range(width):
+                if pixels[x, y] < 140:
+                    row_dark += 1
+            projection.append(row_dark)
+        mean_proj = sum(projection) / len(projection)
+        threshold = max(int(mean_proj * 1.4), 40)
+
+        bands: list[tuple[int, int]] = []
+        in_band = False
+        start = 0
+        for y, val in enumerate(projection):
+            if val > threshold and not in_band:
+                start = y
+                in_band = True
+            elif val <= threshold and in_band:
+                end = y - 1
+                if end - start >= 12:
+                    bands.append((start, end))
+                in_band = False
+        if in_band:
+            end = height - 1
+            if end - start >= 12:
+                bands.append((start, end))
+
+        # Further split very tall bands using intra-band minima to avoid merging multiple rows.
+        def _split_band(y1: int, y2: int) -> list[tuple[int, int]]:
+            sub_bands: list[tuple[int, int]] = []
+            gap_threshold = max(int(threshold * 0.45), 20)
+            active = None
+            for y in range(y1, y2 + 1):
+                val = projection[y]
+                if val > gap_threshold:
+                    if active is None:
+                        active = [y, y]
+                    else:
+                        active[1] = y
+                else:
+                    if active and active[1] - active[0] >= 10:
+                        sub_bands.append((active[0], active[1]))
+                    active = None
+            if active and active[1] - active[0] >= 10:
+                sub_bands.append((active[0], active[1]))
+            return sub_bands
+
+        split_bands: list[tuple[int, int]] = []
+        for (y1, y2) in bands:
+            if (y2 - y1) > 60:
+                split_bands.extend(_split_band(y1, y2))
+            else:
+                split_bands.append((y1, y2))
+        bands = split_bands
+
+        text_rects: list[tuple[int, int, int, int]] = []
+        mid_x = width // 2
+        for idx, (y1, y2) in enumerate(bands):
+            # Drop very low wide bands (likely background/footer)
+            if y1 > height * 0.75:
+                continue
+
+            # Horizontal histogram of dark pixels within band
+            col_dark = [0] * width
+            for y in range(y1, y2 + 1):
+                row = pixels[0, y: width] if False else None  # sentinel to avoid mypy complaints
+                for x in range(width):
+                    if pixels[x, y] < 140:
+                        col_dark[x] += 1
+
+            # Identify header vs rows by width span
+            x_min = min((i for i, v in enumerate(col_dark) if v > 0), default=width)
+            x_max = max((i for i, v in enumerate(col_dark) if v > 0), default=-1)
+            if x_max <= x_min:
+                continue
+
+            is_header = (idx == 0) and (y2 < height * 0.25) and ((x_max - x_min) > width * 0.6)
+            if is_header:
+                text_rects.append((max(0, x_min - 8), max(0, y1 - 6), min(width - 1, x_max + 8), min(height - 1, y2 + 6)))
+                continue
+
+            # Find valley near center to split two columns
+            search_start = int(width * 0.35)
+            search_end = int(width * 0.65)
+            valley_x = None
+            min_val = 1e9
+            for x in range(search_start, search_end):
+                if col_dark[x] < min_val:
+                    min_val = col_dark[x]
+                    valley_x = x
+            if valley_x is None:
+                valley_x = width // 2
+
+            # Build left/right rects
+            def _span(start_x: int, end_x: int) -> tuple[int, int] | None:
+                xs = [x for x in range(start_x, end_x) if col_dark[x] > 0]
+                if not xs:
+                    return None
+                return min(xs), max(xs)
+
+            left_span = _span(0, valley_x)
+            right_span = _span(valley_x, width)
+
+            # Require minimal width to avoid noise
+            min_w = 24
+            if left_span and (left_span[1] - left_span[0]) >= min_w:
+                lx1, lx2 = left_span
+                text_rects.append((max(0, lx1 - 8), max(0, y1 - 6), min(width - 1, lx2 + 8), min(height - 1, y2 + 6)))
+            if right_span and (right_span[1] - right_span[0]) >= min_w:
+                rx1, rx2 = right_span
+                text_rects.append((max(0, rx1 - 8), max(0, y1 - 6), min(width - 1, rx2 + 8), min(height - 1, y2 + 6)))
+
+        if text_rects:
+            text_rects = sorted(text_rects, key=lambda r: (r[1], r[0]))
+            # Deduplicate with simple overlap check
+            dedup_text: list[tuple[int, int, int, int]] = []
+            for rect in text_rects:
+                x1, y1, x2, y2 = rect
+                keep = True
+                for ox1, oy1, ox2, oy2 in dedup_text:
+                    ix1 = max(x1, ox1)
+                    iy1 = max(y1, oy1)
+                    ix2 = min(x2, ox2)
+                    iy2 = min(y2, oy2)
+                    if ix2 >= ix1 and iy2 >= iy1:
+                        inter = (ix2 - ix1 + 1) * (iy2 - iy1 + 1)
+                        oarea = (ox2 - ox1 + 1) * (oy2 - oy1 + 1)
+                        area = (x2 - x1 + 1) * (y2 - y1 + 1)
+                        if inter / min(area, oarea) > 0.5:
+                            keep = False
+                            break
+                if keep:
+                    dedup_text.append(rect)
+
+            dedup_text = sorted(dedup_text, key=lambda r: (r[1], r[0]))
+
+            # Prefer the text-derived rects if they meet or exceed expectation;
+            # otherwise merge them with the existing rects.
+            if len(dedup_text) >= expected:
+                rects = dedup_text[:expected]
+            else:
+                combined = rects + dedup_text
+                combined = sorted(combined, key=lambda r: (r[1], r[0]))
+                if len(combined) > expected:
+                    combined = combined[:expected]
+                rects = combined
+
+    return rects
 
 
 def _crop_image(input_png: Path, output_png: Path, rect: RectModel) -> None:
@@ -2540,6 +2979,56 @@ def run(
                             rects = static_rects
                 
                 if rects:
+                    # Preserve original ordering so we can re-map SPU frame/mask indices
+                    # after applying visual order.
+                    original_rects = list(rects)
+                    # Reorder to column-major visual order: header, then left column top-down, then right column top-down.
+                    frame_w = max(r[2] for r in rects) + 1
+                    frame_h = max(r[3] for r in rects) + 1
+                    header_candidates = [
+                        r
+                        for r in rects
+                        if (r[2] - r[0] + 1) >= frame_w * 0.6 and r[1] < frame_h * 0.3
+                    ]
+                    header_rect = (
+                        sorted(header_candidates, key=lambda r: (r[1], -(r[2] - r[0])))[0]
+                        if header_candidates
+                        else None
+                    )
+                    center = frame_w // 2
+                    left = sorted(
+                        [r for r in rects if r is not header_rect and ((r[0] + r[2]) / 2) < center],
+                        key=lambda r: (r[1], r[0]),
+                    )
+                    right = sorted(
+                        [r for r in rects if r is not header_rect and ((r[0] + r[2]) / 2) >= center],
+                        key=lambda r: (r[1], r[0]),
+                    )
+                    ordered_rects: list[tuple[int, int, int, int]] = []
+                    if header_rect:
+                        ordered_rects.append(header_rect)
+                    ordered_rects.extend(left)
+                    ordered_rects.extend(right)
+                    rects = ordered_rects
+                    # If these rects came from multi-page/SPU detection, keep frame/mask maps aligned.
+                    if menu_id in button_frame_map:
+                        new_frame_map: dict[int, Path] = {}
+                        new_mask_map: dict[int, Path] = {}
+                        for new_idx, rect in enumerate(rects):
+                            old_idx = None
+                            for idx, old_rect in enumerate(original_rects):
+                                if old_rect == rect:
+                                    old_idx = idx
+                                    break
+                            if old_idx is None:
+                                continue
+                            if old_idx in button_frame_map[menu_id]:
+                                new_frame_map[new_idx] = button_frame_map[menu_id][old_idx]
+                            if menu_id in button_mask_map and old_idx in button_mask_map[menu_id]:
+                                new_mask_map[new_idx] = button_mask_map[menu_id][old_idx]
+                        button_frame_map[menu_id] = new_frame_map
+                        if menu_id in button_mask_map:
+                            button_mask_map[menu_id] = new_mask_map
                     logger.info(
                         "menu_images: raw detected rects for %s: %s",
                         menu_id,
@@ -2576,8 +3065,8 @@ def run(
                                     
                                     # If on similar vertical position (same row), limit expansion
                                     if abs(other_y1 - y1) < 50:  # Same row threshold
-                                        # Leave a 10px gap to prevent overlap
-                                        max_x2 = min(max_x2, other_x1 - 10)
+                                        # Do not shrink; allow full width so long text isn't cut.
+                                        continue
                                     # Note: buttons stacked vertically (same x, different y)
                                     # should NOT limit each other's horizontal expansion
                             
@@ -2630,7 +3119,25 @@ def run(
         dst = output_dir / f"{entry.entry_id}.png"
         assert_in_out_dir(dst, out_dir)
         menu_id = entry.menu_id or "unknown_menu"
-        crop_rect = entry.selection_rect or entry.highlight_rect or entry.rect
+        button_index: int | None = None  # used for frame/mask lookup; may remain None
+        # Prefer visually ordered rects when we detected them; this avoids BTN_IT ordering
+        # mismatches for two-column layouts (e.g., DrWho vs navigation order).
+        crop_rect = None
+        if menu_id in fallback_rects:
+            rects = fallback_rects[menu_id]
+            index = 0
+            try:
+                index = int(entry.entry_id.replace("btn", "")) - 1
+            except ValueError:
+                index = 0
+            if 0 <= index < len(rects):
+                x1, y1, x2, y2 = rects[index]
+                crop_rect = RectModel(x=x1, y=y1, w=x2 - x1 + 1, h=y2 - y1 + 1)
+        
+        # If no visual rect, fall back to BTN_IT-derived rectangles.
+        if crop_rect is None:
+            crop_rect = entry.selection_rect or entry.highlight_rect or entry.rect
+        
         if crop_rect is None and menu_id in fallback_rects:
             rects = fallback_rects[menu_id]
             index = 0

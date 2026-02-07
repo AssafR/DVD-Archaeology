@@ -147,9 +147,20 @@ This index catalogs all project documentation, including implementation guides, 
   - IQR-based drop of short rects when safe
   - Preserves expected count before ranking
 
+#### 7. NAV Parse PGC Validation ⭐ NEW
+**File:** `docs/NAV_PARSE_PGC_VALIDATION.md`  
+**Purpose:** Deterministic guardrails for VTSM/VMGM PGC tables before NAV/SPU scans  
+**Contents:**
+- Structural validation rules (bounds, offsets, monotonicity, header size, button table presence)
+- Logging and failure behavior
+- Rationale vs. heuristic caps
+- Verification steps and expected outcomes
+
+**Audience:** Maintainers, nav_parse developers, QA
+
 ### 🧪 Test Documentation
 
-#### 7. Regression Test Suite
+#### 8. Regression Test Suite
 **File:** `tests/test_dvd_sample_01_regression.py`  
 **Purpose:** Automated validation of SPU extraction  
 **Documentation:**
@@ -161,7 +172,7 @@ This index catalogs all project documentation, including implementation guides, 
 - `image_similarity()` - Algorithm documentation
 - `compare_images()` - Function documentation
 
-#### 8. Test Fixtures README
+#### 9. Test Fixtures README
 **File:** `tests/fixtures/DVD_Sample_01/README.md`  
 **Purpose:** Document reference images and test data  
 **Contents:**
@@ -173,7 +184,7 @@ This index catalogs all project documentation, including implementation guides, 
 
 ### 🔧 Tools Documentation
 
-#### 9. Debug Tool
+#### 10. Debug Tool
 **File:** `tools/debug_spu_packets.py`  
 **Purpose:** Debug utility for SPU analysis  
 **Documentation:**
@@ -184,7 +195,7 @@ This index catalogs all project documentation, including implementation guides, 
 
 ### 📂 Documentation Index
 
-#### 10. Documentation Directory README
+#### 11. Documentation Directory README
 **File:** `docs/README.md`  
 **Purpose:** Navigation hub for all documentation  
 **Contents:**
@@ -259,7 +270,7 @@ This index catalogs all project documentation, including implementation guides, 
 ## Documentation Metrics
 
 **Total Documentation:**
-- **9** primary documentation files
+- **10** primary documentation files
 - **1** code module with comprehensive docstrings
 - **1** integration module with detailed comments
 - **1** test suite with full documentation

@@ -1,0 +1,75 @@
+{
+  "disc_name": "DrWho_s01e01__Confidential_s1",
+  "description": "OCR regression for Dr Who Confidential S1E01 menu (special layout: wide top heading + two columns of episode buttons).",
+  "source_paths": {
+    "primary": "Q:\\\\DVDs\\\\DrWho_s01e01__Confidential_s1\\\\"
+  },
+  "test_config": {
+    "min_similarity": 0.85,
+    "skip_if_unavailable": true
+  },
+  "expected_results": [
+    {
+      "entry_id": "btn1",
+      "raw_text": "Dr Who 101 - Pilot Episode"
+    },
+    {
+      "entry_id": "btn2",
+      "raw_text": "101 Bringing Back The Doctor"
+    },
+    {
+      "entry_id": "btn3",
+      "raw_text": "102 The Good The Bad The Ugly"
+    },
+    {
+      "entry_id": "btn4",
+      "raw_text": "103 Tardis Tales"
+    },
+    {
+      "entry_id": "btn5",
+      "raw_text": "104 I get a sidekick out of you"
+    },
+    {
+      "entry_id": "btn6",
+      "raw_text": "105 Why on Earth"
+    },
+    {
+      "entry_id": "btn7",
+      "raw_text": "106 Dalek"
+    },
+    {
+      "entry_id": "btn8",
+      "raw_text": "107 The Dark Side"
+    },
+    {
+      "entry_id": "btn9",
+      "raw_text": "108 Time Trouble"
+    },
+    {
+      "entry_id": "btn10",
+      "raw_text": "109 Special Effects"
+    },
+    {
+      "entry_id": "btn11",
+      "raw_text": "110 Weird Science"
+    },
+    {
+      "entry_id": "btn12",
+      "raw_text": "111 Unsung heroes"
+    },
+    {
+      "entry_id": "btn13",
+      "raw_text": "112 The World of Dr Who"
+    },
+    {
+      "entry_id": "btn14",
+      "raw_text": "113 The Last Battle"
+    }
+  ],
+  "known_issues": [],
+  "metadata": {
+    "created_date": "2026-02-07",
+    "baseline_version": "Manual transcription from menu screenshot",
+    "approved_by": "Manual verification"
+  }
+}
