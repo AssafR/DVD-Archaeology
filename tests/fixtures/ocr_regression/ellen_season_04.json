@@ -9,33 +9,7 @@
     "min_similarity": 0.85,
     "skip_if_unavailable": true
   },
-  "known_issues": [
-    {
-      "entry_id": "btn1",
-      "issue": "SPU text drops the numbering prefix and only returns the code/date.",
-      "expected_similarity": 0.882
-    },
-    {
-      "entry_id": "btn8",
-      "issue": "Day value collapses to '2' instead of '27' after SPU clustering.",
-      "expected_similarity": 0.833
-    },
-    {
-      "entry_id": "btn12",
-      "issue": "Year truncation persists: '97' → '9' in the SPU result.",
-      "expected_similarity": 0.861
-    },
-    {
-      "entry_id": "btn13",
-      "issue": "Episode index prefix is missing and the apostrophe becomes curly (Makin’).",
-      "expected_similarity": 0.835
-    },
-    {
-      "entry_id": "btn14",
-      "issue": "Missing space between day and month: '5 Feb' → 'SFeb'.",
-      "expected_similarity": 0.818
-    }
-  ],
+  "known_issues": [],
   "metadata": {
     "created_date": "2026-02-01",
     "last_updated": "2026-02-01",

@@ -123,9 +123,13 @@ Within-text gaps vary by row and cancel out.
    (`min_button_width=60`, `min_char_count=4`), and the final order is
    header -> left (top-to-bottom) -> right (top-to-bottom).
 
-3. **Skip legacy column splitting** -- when column-aware clustering is active,
-   `_split_rows_into_columns()` is bypassed entirely, along with the row-major
-   re-sort that would destroy the ordering.
+3. **Skip legacy column splitting** -- when ANY character-level text clustering
+   is used (column-aware or single-column), `_split_rows_into_columns()` is
+   bypassed entirely.  The band-based splitter was designed for large-component
+   SPU highlights; applying it to text-clustered rects incorrectly re-splits
+   buttons (e.g. separating episode-number prefixes from titles in Entourage).
+   For the column-aware path the row-major re-sort is also skipped to preserve
+   column-major ordering.
 
 4. **Simplified multi-page alignment** -- `_detect_menu_rects_multi_page()` now
    trusts the ordering from `_extract_spu_button_rects()` and only performs
@@ -140,7 +144,7 @@ Within-text gaps vary by row and cancel out.
 | Dr Who Confidential     | Character-level | Two-column    | **Fixed** -- global gutter detects columns correctly  |
 | Ellen S04               | Character-level | Single-column | No change -- no gutter found, same clustering path   |
 | Friends S09-10          | Character-level | Single-column | No change -- no gutter found                         |
-| Entourage Emmy 2005     | Character-level | Unknown       | Safe -- gutter detection is conservative             |
+| Entourage Emmy 2005     | Character-level | Single-column | **Fixed** -- skip column splitter for text-clustered rects |
 | Claudius 9-13           | Large-component | Single-column | No change -- large-component path unchanged          |
 
 For single-column menus, `detect_column_gutter()` returns `None` because there

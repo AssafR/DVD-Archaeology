@@ -965,22 +965,20 @@ def _extract_spu_button_rects(
         page_rects = []
         component_rects_for_split: list[tuple[int, int, int, int]] | None = None
         column_aware_clustering_used = False
+        text_clustering_used = False  # True when any character-level clustering produced rects
         
         if len(small_components) > 20 and not large_components:
             # Likely character-level SPU (e.g., Friends, Ellen, DrWho)
             # Cluster tiny character boxes into button text lines
             logger.info(f"    Detected {len(small_components)} small components - attempting text clustering")
+            text_clustering_used = True
             
             from dvdmenu_extract.util.spu_text_clustering import (
                 cluster_character_rects_into_buttons,
                 detect_column_gutter,
             )
 
-            # ---- Column-aware clustering ------------------------------------
-            # Detect a global column gutter BEFORE merging characters into
-            # buttons.  When a gutter is found we partition characters into
-            # left / right groups, cluster each side independently, and
-            # produce column-major ordering (header, all-left, all-right).
+            use_column_aware = False
             gutter_x = detect_column_gutter(small_components, bitmap.width)
 
             if gutter_x is not None:
@@ -1006,7 +1004,6 @@ def _extract_spu_button_rects(
                 has_left_header = any((r[0] + r[2]) / 2 < gutter_x for r in header_chars)
                 has_right_header = any((r[0] + r[2]) / 2 >= gutter_x for r in header_chars)
                 if not (has_left_header and has_right_header):
-                    # Not a true cross-column header; put chars back in body
                     body_chars = header_chars + body_chars
                     header_chars = []
 
@@ -1014,70 +1011,71 @@ def _extract_spu_button_rects(
                 left_chars = [r for r in body_chars if (r[0] + r[2]) / 2 < gutter_x]
                 right_chars = [r for r in body_chars if (r[0] + r[2]) / 2 >= gutter_x]
 
-                logger.info(
-                    "    Column partition: %d header, %d left, %d right chars",
-                    len(header_chars), len(left_chars), len(right_chars),
+                left_span = 0
+                if left_chars:
+                    left_span = max(r[2] for r in left_chars) - min(r[0] for r in left_chars) + 1
+                narrow_number_column = (
+                    left_span > 0
+                    and left_span < bitmap.width * 0.25
+                    and len(left_chars) < max(1, len(right_chars))
                 )
+                if narrow_number_column:
+                    logger.info("    Narrow numbering column detected, skipping column-aware clustering")
+                else:
+                    logger.info(
+                        "    Column partition: %d header, %d left, %d right chars",
+                        len(header_chars), len(left_chars), len(right_chars),
+                    )
 
-                # Clustering parameters shared across all groups.
-                # Thresholds are more relaxed than single-column mode because
-                # the column partition already eliminated cross-column noise:
-                #   min_button_width  60 (vs 250) - each column is ~half frame
-                #   min_aspect_ratio  3.0 (vs 10)  - short labels are valid
-                #   min_char_count    4   (vs 20)  - e.g. "106 Dalek" ~8 glyphs
-                #   max_button_height 100 (vs 40)  - wider tolerance per column
-                _cluster_kw = dict(
-                    line_height_tolerance=10,
-                    char_spacing_max=20,
-                    min_button_width=60,
-                    min_button_height=8,
-                    max_button_height=100,
-                    min_aspect_ratio=3.0,
-                    min_char_count=4,
-                    padding_left=10,
-                    padding_top=2,
-                    padding_right=80,
-                    padding_bottom=2,
-                    merge_same_line=True,
-                )
+                    _cluster_kw = dict(
+                        line_height_tolerance=10,
+                        char_spacing_max=20,
+                        min_button_width=60,
+                        min_button_height=8,
+                        max_button_height=100,
+                        min_aspect_ratio=3.0,
+                        min_char_count=4,
+                        padding_left=10,
+                        padding_top=2,
+                        padding_right=80,
+                        padding_bottom=2,
+                        merge_same_line=True,
+                    )
 
-                header_rects = (
-                    cluster_character_rects_into_buttons(header_chars, **_cluster_kw)
-                    if header_chars else []
-                )
-                left_rects = (
-                    cluster_character_rects_into_buttons(left_chars, **_cluster_kw)
-                    if left_chars else []
-                )
-                right_rects = (
-                    cluster_character_rects_into_buttons(right_chars, **_cluster_kw)
-                    if right_chars else []
-                )
+                    header_rects = (
+                        cluster_character_rects_into_buttons(header_chars, **_cluster_kw)
+                        if header_chars else []
+                    )
+                    left_rects = (
+                        cluster_character_rects_into_buttons(left_chars, **_cluster_kw)
+                        if left_chars else []
+                    )
+                    right_rects = (
+                        cluster_character_rects_into_buttons(right_chars, **_cluster_kw)
+                        if right_chars else []
+                    )
 
-                # Sort each group top-to-bottom
-                header_rects.sort(key=lambda r: (r[1], r[0]))
-                left_rects.sort(key=lambda r: (r[1], r[0]))
-                right_rects.sort(key=lambda r: (r[1], r[0]))
+                    header_rects.sort(key=lambda r: (r[1], r[0]))
+                    left_rects.sort(key=lambda r: (r[1], r[0]))
+                    right_rects.sort(key=lambda r: (r[1], r[0]))
 
-                # Filter tiny stray header rects — a real header spans at
-                # least 40 % of the frame width.
-                min_header_w = int(bitmap.width * 0.4)
-                header_rects = [
-                    r for r in header_rects
-                    if (r[2] - r[0]) >= min_header_w
-                ]
+                    min_header_w = int(bitmap.width * 0.4)
+                    header_rects = [
+                        r for r in header_rects
+                        if (r[2] - r[0]) >= min_header_w
+                    ]
 
-                # Column-major ordering: header, all-left, all-right
-                clustered_rects = header_rects + left_rects + right_rects
-                column_aware_clustering_used = True
-                any_column_aware = True
+                    clustered_rects = header_rects + left_rects + right_rects
+                    column_aware_clustering_used = True
+                    any_column_aware = True
+                    use_column_aware = True
 
-                logger.info(
-                    "    Column-aware clustering: %d header + %d left + %d right = %d buttons",
-                    len(header_rects), len(left_rects), len(right_rects), len(clustered_rects),
-                )
-            else:
-                # --- Single-column mode (unchanged) --------------------------
+                    logger.info(
+                        "    Column-aware clustering: %d header + %d left + %d right = %d buttons",
+                        len(header_rects), len(left_rects), len(right_rects), len(clustered_rects),
+                    )
+
+            if not use_column_aware:
                 clustered_rects = cluster_character_rects_into_buttons(
                     small_components,
                     line_height_tolerance=10,
@@ -1094,7 +1092,6 @@ def _extract_spu_button_rects(
                     merge_same_line=True,
                 )
 
-                # If we under-detect buttons, retry with relaxed thresholds.
                 if len(clustered_rects) < expected:
                     relaxed_rects = cluster_character_rects_into_buttons(
                         small_components,
@@ -1119,7 +1116,6 @@ def _extract_spu_button_rects(
                         )
                         clustered_rects = relaxed_rects
 
-                # Final fallback for very short labels on low-count menus.
                 if len(clustered_rects) < expected and expected <= 10:
                     short_label_rects = cluster_character_rects_into_buttons(
                         small_components,
@@ -1154,6 +1150,20 @@ def _extract_spu_button_rects(
             
             logger.info(f"    Clustered {len(small_components)} characters → {len(clustered_rects)} buttons")
             page_rects = clustered_rects
+            if component_rects_for_split:
+                def expand_rect(rect):
+                    x1, y1, x2, y2 = rect
+                    overlapping = [
+                        c
+                        for c in component_rects_for_split
+                        if not (c[3] < y1 or c[1] > y2)
+                    ]
+                    if overlapping:
+                        x1 = min(x1, min(c[0] for c in overlapping))
+                        y1 = min(y1, min(c[1] for c in overlapping))
+                        y2 = max(y2, max(c[3] for c in overlapping))
+                    return (x1, y1, x2, y2)
+                page_rects = [expand_rect(rect) for rect in page_rects]
             
             for idx, rect in enumerate(clustered_rects):
                 w, h = rect[2] - rect[0], rect[3] - rect[1]
@@ -1250,6 +1260,40 @@ def _extract_spu_button_rects(
                     split_bands.append((y1, y2))
             bands = split_bands
 
+            def _merge_number_prefix_columns(
+                left: list[tuple[int, int, int, int]],
+                right: list[tuple[int, int, int, int]],
+                frame_w: int,
+            ) -> list[tuple[int, int, int, int]] | None:
+                if not left or not right or len(left) != len(right):
+                    return None
+                merged: list[tuple[int, int, int, int]] = []
+                for l_rect, r_rect in zip(left, right):
+                    combined_height = max(l_rect[3], r_rect[3]) - min(l_rect[1], r_rect[1]) + 1
+                    if combined_height <= 0:
+                        return None
+                    overlap = max(0, min(l_rect[3], r_rect[3]) - max(l_rect[1], r_rect[1]) + 1)
+                    if overlap / combined_height < 0.5:
+                        return None
+                    left_width = l_rect[2] - l_rect[0] + 1
+                    right_width = r_rect[2] - r_rect[0] + 1
+                    if left_width <= 0 or right_width <= 0:
+                        return None
+                    if left_width > frame_w * 0.35 or left_width >= right_width * 0.75:
+                        return None
+                    gap = r_rect[0] - l_rect[2]
+                    if gap > frame_w * 0.25:
+                        return None
+                    merged.append(
+                        (
+                            l_rect[0],
+                            min(l_rect[1], r_rect[1]),
+                            r_rect[2],
+                            max(l_rect[3], r_rect[3]),
+                        )
+                    )
+                return merged
+
             final_rects: list[tuple[int, int, int, int]] = []
             for y1, y2 in bands:
                 comps = [(x1, yy1, x2, yy2) for (x1, yy1, x2, yy2) in rects if not (yy2 < y1 or yy1 > y2)]
@@ -1344,8 +1388,12 @@ def _extract_spu_button_rects(
                 if depth >= depth_thresh and gutter_ok and halves_ok:
                     left_rect = (max(0, x_min - 4), max(0, y1 - 3), max(0, valley_x), y2 + 3)
                     right_rect = (min(frame_w - 1, valley_x + 1), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3)
-                    final_rects.append(left_rect)
-                    final_rects.append(right_rect)
+                    left_width = max(1, left_rect[2] - left_rect[0] + 1)
+                    if left_width < frame_w * 0.25:
+                        final_rects.append((max(0, x_min - 4), max(0, y1 - 3), min(frame_w - 1, x_max + 4), y2 + 3))
+                    else:
+                        final_rects.append(left_rect)
+                        final_rects.append(right_rect)
                 else:
                     # Fallback: split on a strong component gap when valley is weak.
                     gap_split_done = False
@@ -1401,18 +1449,33 @@ def _extract_spu_button_rects(
                 [r for r in remaining if ((r[0] + r[2]) / 2) >= center],
                 key=lambda r: (r[1], r[0]),
             )
+            merged_rows = _merge_number_prefix_columns(left, right, frame_w)
+            if merged_rows is None and logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    "column split keep separate left=%d right=%d frame_w=%d",
+                    len(left),
+                    len(right),
+                    frame_w,
+                )
+            final_rows = merged_rows if merged_rows is not None else left + right
             if header_rect:
                 ordered_rects.append(header_rect)
-            ordered_rects.extend(left)
-            ordered_rects.extend(right)
+            ordered_rects.extend(final_rows)
             return ordered_rects
 
         if page_rects:
-            if column_aware_clustering_used:
-                # Rects are already per-button in column-major order;
-                # skip the legacy band-based column splitter and
-                # the row-major re-sort that would destroy the ordering.
-                logger.info(f"    Skipping _split_rows_into_columns (column-aware clustering)")
+            if text_clustering_used:
+                # Text clustering (both column-aware and single-column) already
+                # produced correct per-button rects.  The legacy band-based
+                # column splitter is designed for large-component SPU highlights
+                # and would incorrectly re-split text-clustered buttons (e.g.
+                # splitting episode-number prefixes from titles in Entourage).
+                if column_aware_clustering_used:
+                    logger.info(f"    Skipping _split_rows_into_columns (column-aware clustering)")
+                else:
+                    logger.info(f"    Skipping _split_rows_into_columns (text clustering already applied)")
+                    # Single-column text clustering: sort by Y (top-to-bottom)
+                    page_rects.sort(key=lambda r: (r[1], r[0]))
             else:
                 page_rects = _split_rows_into_columns(
                     page_rects,
