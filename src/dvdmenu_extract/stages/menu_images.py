@@ -1021,9 +1021,11 @@ def _extract_spu_button_rects(
 
                 # Clustering parameters shared across all groups.
                 # Thresholds are more relaxed than single-column mode because
-                # the column partition already eliminated cross-column noise.
-                # In particular, min_char_count must be low enough to capture
-                # short labels like "106 Dalek" (~8 glyphs in SPU).
+                # the column partition already eliminated cross-column noise:
+                #   min_button_width  60 (vs 250) - each column is ~half frame
+                #   min_aspect_ratio  3.0 (vs 10)  - short labels are valid
+                #   min_char_count    4   (vs 20)  - e.g. "106 Dalek" ~8 glyphs
+                #   max_button_height 100 (vs 40)  - wider tolerance per column
                 _cluster_kw = dict(
                     line_height_tolerance=10,
                     char_spacing_max=20,

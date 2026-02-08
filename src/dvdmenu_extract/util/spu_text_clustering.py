@@ -5,15 +5,25 @@ Many DVDs store button text as individual character glyphs in SPU overlays,
 not as full button highlight rectangles. This module clusters these tiny
 character regions into complete button text bounding boxes.
 
-Algorithm:
-1. Sort all character boxes by vertical position (top edge)
-2. Group into horizontal text lines (characters with similar Y coordinates)
-3. Within each line, merge horizontally adjacent characters
-4. Return button-level bounding boxes suitable for OCR
+Two-pass approach:
+
+1. **Column detection** (`detect_column_gutter`): build a global horizontal
+   projection from ALL character rects on the page and look for a strong
+   vertical valley.  If found, the caller partitions characters into
+   left / right groups before clustering, producing column-major ordering
+   (header, all-left, all-right).  Single-column menus get ``None`` and
+   fall through to the standard path unchanged.
+
+2. **Per-group clustering** (`cluster_character_rects_into_buttons`):
+   sort character boxes by vertical position, group into horizontal text
+   lines (characters with similar Y coordinates), merge horizontally
+   adjacent characters within each line, and return button-level bounding
+   boxes suitable for OCR.
 
 Tested with:
-- Friends S09-10: 627 character regions → ~19 button text lines
-- Ellen Season 04: 514 character regions → ~15 button text lines
+- Friends S09-10: 627 character regions → ~19 button text lines (single-column)
+- Ellen Season 04: 514 character regions → ~15 button text lines (single-column)
+- Dr Who Confidential: ~400 character regions → 14 buttons (two-column via gutter detection)
 """
 
 from typing import List, Optional, Tuple

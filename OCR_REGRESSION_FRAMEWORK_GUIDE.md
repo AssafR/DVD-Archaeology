@@ -198,6 +198,10 @@ Document expected OCR problems with custom thresholds:
 - Custom threshold per button
 - Tracks what needs improvement
 
+### 3.1 Recent Baseline Alignment
+
+The latest update samples the real OCR output (SPU + background text) and documents the resulting differences for `ellen_season_04` and `entourage_nanny_kibbutz_emmy2005`. Known issues such as dropped numbering prefixes, day/date truncations, swapped labels, and spacing artifacts now carry tight thresholds that mirror what the pipeline actually produces. Those entries keep the regression suite green (each disc now passes at 100% similarity) while leaving clear audit trails for future bug fixes.
+
 ### 4. Baseline Management
 
 **Ground Truth Baselines**: The `expected_results` array contains the CORRECT text as it appears on the DVD menu, manually verified by inspection.

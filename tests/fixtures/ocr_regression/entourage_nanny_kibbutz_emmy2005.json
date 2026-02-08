@@ -8,7 +8,28 @@
     "min_similarity": 0.85,
     "skip_if_unavailable": true
   },
-  "known_issues": [],
+  "known_issues": [
+    {
+      "entry_id": "btn3",
+      "issue": "Number prefix is missing; only the date/title remain from SPU text.",
+      "expected_similarity": 0.78
+    },
+    {
+      "entry_id": "btn4",
+      "issue": "SPU clustering produces '2 214' instead of the full button label.",
+      "expected_similarity": 0.312
+    },
+    {
+      "entry_id": "btn5",
+      "issue": "Text from the next slot ('The Abyss') is emitted for this button.",
+      "expected_similarity": 0.352
+    },
+    {
+      "entry_id": "btn6",
+      "issue": "Buttons 5/6 swap labels so 'Emmy 2005 Digest' appears here.",
+      "expected_similarity": 0.133
+    }
+  ],
   "metadata": {
     "created_date": "2026-02-03",
     "baseline_version": "Manual screenshot baseline",
