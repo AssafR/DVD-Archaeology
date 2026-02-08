@@ -16,7 +16,118 @@ Tested with:
 - Ellen Season 04: 514 character regions → ~15 button text lines
 """
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
+
+
+def detect_column_gutter(
+    char_rects: List[Tuple[int, int, int, int]],
+    frame_w: int,
+    min_depth: float = 0.6,
+    min_gutter_width: int = 20,
+    edge_margin: float = 0.15,
+) -> Optional[int]:
+    """Detect a vertical column gutter from ALL character components on a page.
+
+    Builds a global horizontal projection (sum of character heights at each X)
+    across every character rect, then finds the deepest valley.  Because the
+    projection accumulates evidence from ALL rows, a true column gutter (present
+    in every row) produces a much stronger valley than any within-text gap that
+    varies from row to row.
+
+    Args:
+        char_rects: All character-level bounding boxes on the page.
+        frame_w:    Width of the frame / bitmap in pixels.
+        min_depth:  Minimum relative valley depth (0-1) to accept a gutter.
+        min_gutter_width: Minimum width of the zero/low-density region (px).
+        edge_margin: Fraction of frame width to exclude at left/right edges
+                     so we don't pick a valley at the very edge of text.
+
+    Returns:
+        The X coordinate of the gutter centre, or ``None`` when no convincing
+        two-column gutter is found.
+    """
+    if not char_rects or frame_w <= 0:
+        return None
+
+    # --- horizontal projection: accumulate character height at each X --------
+    x_proj = [0] * frame_w
+    for x1, y1, x2, y2 in char_rects:
+        cx1 = max(0, min(frame_w - 1, x1))
+        cx2 = max(cx1, min(frame_w - 1, x2))
+        h = max(1, y2 - y1 + 1)
+        for x in range(cx1, cx2 + 1):
+            x_proj[x] += h
+
+    # --- smooth to reduce per-character spikes --------------------------------
+    window = 11
+    half_w = window // 2
+    smoothed: List[float] = []
+    for x in range(frame_w):
+        lo = max(0, x - half_w)
+        hi = min(frame_w, x + half_w + 1)
+        smoothed.append(sum(x_proj[lo:hi]) / max(1, hi - lo))
+
+    # --- search for the deepest valley inside [left_margin, right_margin] -----
+    left_margin = int(frame_w * edge_margin)
+    right_margin = int(frame_w * (1.0 - edge_margin))
+    if right_margin - left_margin < min_gutter_width + 2:
+        return None
+
+    search = smoothed[left_margin:right_margin + 1]
+    valley_offset = min(range(len(search)), key=lambda i: search[i])
+    valley_x = left_margin + valley_offset
+    valley_val = search[valley_offset]
+
+    # peaks on each side
+    left_slice = search[:valley_offset]
+    right_slice = search[valley_offset + 1:]
+    left_peak = max(left_slice) if left_slice else 0.0
+    right_peak = max(right_slice) if right_slice else 0.0
+    peak = max(left_peak, right_peak)
+
+    if peak <= 0:
+        return None
+
+    depth = (peak - valley_val) / peak
+
+    # --- measure gutter width (consecutive low-density samples) ---------------
+    tol = valley_val + peak * 0.05  # allow up to 5 % of peak
+    gutter = 1
+    lx = valley_x - 1
+    while lx >= 0 and smoothed[lx] <= tol:
+        gutter += 1
+        lx -= 1
+    rx = valley_x + 1
+    while rx < frame_w and smoothed[rx] <= tol:
+        gutter += 1
+        rx += 1
+
+    # --- both halves must have substantial AND balanced density ----------------
+    left_density = sum(smoothed[left_margin:valley_x])
+    right_density = sum(smoothed[valley_x + 1:right_margin + 1])
+    min_side_density = peak * 3  # at least a few characters worth
+
+    # Balance: the smaller side must be at least 25 % of the larger.
+    # This rejects false gutters between a narrow prefix (e.g. "65. 4-3")
+    # and a wide text body, while accepting true two-column layouts where
+    # both columns carry comparable amounts of text.
+    if left_density > 0 and right_density > 0:
+        balance = min(left_density, right_density) / max(left_density, right_density)
+    else:
+        balance = 0.0
+    min_balance = 0.25
+
+    if depth < min_depth:
+        return None
+    if gutter < min_gutter_width:
+        return None
+    if left_density < min_side_density or right_density < min_side_density:
+        return None
+    if balance < min_balance:
+        return None
+
+    return valley_x
+
 
 def cluster_character_rects_into_buttons(
     char_rects: List[Tuple[int, int, int, int]],

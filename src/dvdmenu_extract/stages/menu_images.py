@@ -902,6 +902,7 @@ def _extract_spu_button_rects(
     page_buttons = []  # List of (page_index, list of rects)
     page_bitmaps: dict[int, SpuBitmap] = {}
     packet_count = 0
+    any_column_aware = False  # Set True when column-aware clustering produces rects
     
     for substream_id, packet in reassemble_spu_packets(vob_data):
         packet_count += 1
@@ -963,90 +964,194 @@ def _extract_spu_button_rects(
         
         page_rects = []
         component_rects_for_split: list[tuple[int, int, int, int]] | None = None
+        column_aware_clustering_used = False
         
         if len(small_components) > 20 and not large_components:
-            # Likely character-level SPU (e.g., Friends, Ellen)
+            # Likely character-level SPU (e.g., Friends, Ellen, DrWho)
             # Cluster tiny character boxes into button text lines
             logger.info(f"    Detected {len(small_components)} small components - attempting text clustering")
             
-            from dvdmenu_extract.util.spu_text_clustering import cluster_character_rects_into_buttons
-            clustered_rects = cluster_character_rects_into_buttons(
-                small_components,
-                line_height_tolerance=10,   # Tolerant enough for character Y variations
-                char_spacing_max=20,        # Not used when merge_same_line=True
-                min_button_width=250,       # Low threshold - capture episode 229
-                min_button_height=10,       # Allow short buttons
-                max_button_height=100,      # Very permissive
-                min_aspect_ratio=10.0,      # Relaxed
-                min_char_count=15,          # Filter short nav text but keep episode 229
-                padding_left=10,
-                padding_top=2,              # Minimal vertical padding to avoid capturing adjacent buttons
-                padding_right=80,           # Extra padding to capture trailing text
-                padding_bottom=2,           # Minimal vertical padding to avoid capturing adjacent buttons
-                merge_same_line=True,       # Merge all text on same Y line (handles wide gaps)
+            from dvdmenu_extract.util.spu_text_clustering import (
+                cluster_character_rects_into_buttons,
+                detect_column_gutter,
             )
-            
-            # If we under-detect buttons, retry with relaxed thresholds.
-            # This helps menus where some valid buttons are short (e.g., "Exodus"),
-            # but still avoids tiny nav glyphs via width/aspect filters.
-            if len(clustered_rects) < expected:
-                relaxed_rects = cluster_character_rects_into_buttons(
-                    small_components,
-                    line_height_tolerance=12,
-                    char_spacing_max=20,
-                    min_button_width=180,
-                    min_button_height=10,
-                    max_button_height=110,
-                    min_aspect_ratio=6.0,
-                    min_char_count=8,
-                    padding_left=10,
-                    padding_top=2,
-                    padding_right=100,
-                    padding_bottom=2,
-                    merge_same_line=True,
+
+            # ---- Column-aware clustering ------------------------------------
+            # Detect a global column gutter BEFORE merging characters into
+            # buttons.  When a gutter is found we partition characters into
+            # left / right groups, cluster each side independently, and
+            # produce column-major ordering (header, all-left, all-right).
+            gutter_x = detect_column_gutter(small_components, bitmap.width)
+
+            if gutter_x is not None:
+                logger.info(f"    Detected column gutter at x={gutter_x}")
+
+                # --- Header detection: chars in the top region that span
+                #     across the gutter are header text, not column text.
+                y_values = [r[1] for r in small_components]
+                y_min_all = min(y_values)
+                y_max_all = max(r[3] for r in small_components)
+                y_range = y_max_all - y_min_all + 1
+                header_y_limit = y_min_all + int(y_range * 0.15)
+
+                header_chars: list[tuple[int, int, int, int]] = []
+                body_chars: list[tuple[int, int, int, int]] = []
+                for r in small_components:
+                    if r[1] <= header_y_limit:
+                        header_chars.append(r)
+                    else:
+                        body_chars.append(r)
+
+                # Only treat top chars as header if they span across the gutter
+                has_left_header = any((r[0] + r[2]) / 2 < gutter_x for r in header_chars)
+                has_right_header = any((r[0] + r[2]) / 2 >= gutter_x for r in header_chars)
+                if not (has_left_header and has_right_header):
+                    # Not a true cross-column header; put chars back in body
+                    body_chars = header_chars + body_chars
+                    header_chars = []
+
+                # --- Partition body characters at the gutter -----------------
+                left_chars = [r for r in body_chars if (r[0] + r[2]) / 2 < gutter_x]
+                right_chars = [r for r in body_chars if (r[0] + r[2]) / 2 >= gutter_x]
+
+                logger.info(
+                    "    Column partition: %d header, %d left, %d right chars",
+                    len(header_chars), len(left_chars), len(right_chars),
                 )
-                if len(relaxed_rects) > len(clustered_rects):
-                    logger.info(
-                        "    Relaxed clustering improved %d → %d buttons",
-                        len(clustered_rects),
-                        len(relaxed_rects),
-                    )
-                    clustered_rects = relaxed_rects
-            
-            # Final fallback for very short labels (e.g., "Exodus") on low-count menus.
-            if len(clustered_rects) < expected and expected <= 10:
-                short_label_rects = cluster_character_rects_into_buttons(
-                    small_components,
-                    line_height_tolerance=12,
+
+                # Clustering parameters shared across all groups.
+                # Thresholds are more relaxed than single-column mode because
+                # the column partition already eliminated cross-column noise.
+                # In particular, min_char_count must be low enough to capture
+                # short labels like "106 Dalek" (~8 glyphs in SPU).
+                _cluster_kw = dict(
+                    line_height_tolerance=10,
                     char_spacing_max=20,
-                    min_button_width=80,
-                    min_button_height=10,
-                    max_button_height=120,
+                    min_button_width=60,
+                    min_button_height=8,
+                    max_button_height=100,
                     min_aspect_ratio=3.0,
                     min_char_count=4,
                     padding_left=10,
                     padding_top=2,
-                    padding_right=60,
+                    padding_right=80,
                     padding_bottom=2,
                     merge_same_line=True,
-                    trim_right_small_group=True,
-                    trim_right_gap_threshold=160,
-                    trim_right_max_width=180,
-                    trim_left_small_group=True,
-                    trim_left_gap_threshold=90,
-                    trim_left_max_width=150,
                 )
-                if len(short_label_rects) > len(clustered_rects):
-                    logger.info(
-                        "    Short-label clustering improved %d → %d buttons",
-                        len(clustered_rects),
-                        len(short_label_rects),
+
+                header_rects = (
+                    cluster_character_rects_into_buttons(header_chars, **_cluster_kw)
+                    if header_chars else []
+                )
+                left_rects = (
+                    cluster_character_rects_into_buttons(left_chars, **_cluster_kw)
+                    if left_chars else []
+                )
+                right_rects = (
+                    cluster_character_rects_into_buttons(right_chars, **_cluster_kw)
+                    if right_chars else []
+                )
+
+                # Sort each group top-to-bottom
+                header_rects.sort(key=lambda r: (r[1], r[0]))
+                left_rects.sort(key=lambda r: (r[1], r[0]))
+                right_rects.sort(key=lambda r: (r[1], r[0]))
+
+                # Filter tiny stray header rects — a real header spans at
+                # least 40 % of the frame width.
+                min_header_w = int(bitmap.width * 0.4)
+                header_rects = [
+                    r for r in header_rects
+                    if (r[2] - r[0]) >= min_header_w
+                ]
+
+                # Column-major ordering: header, all-left, all-right
+                clustered_rects = header_rects + left_rects + right_rects
+                column_aware_clustering_used = True
+                any_column_aware = True
+
+                logger.info(
+                    "    Column-aware clustering: %d header + %d left + %d right = %d buttons",
+                    len(header_rects), len(left_rects), len(right_rects), len(clustered_rects),
+                )
+            else:
+                # --- Single-column mode (unchanged) --------------------------
+                clustered_rects = cluster_character_rects_into_buttons(
+                    small_components,
+                    line_height_tolerance=10,
+                    char_spacing_max=20,
+                    min_button_width=250,
+                    min_button_height=10,
+                    max_button_height=100,
+                    min_aspect_ratio=10.0,
+                    min_char_count=15,
+                    padding_left=10,
+                    padding_top=2,
+                    padding_right=80,
+                    padding_bottom=2,
+                    merge_same_line=True,
+                )
+
+                # If we under-detect buttons, retry with relaxed thresholds.
+                if len(clustered_rects) < expected:
+                    relaxed_rects = cluster_character_rects_into_buttons(
+                        small_components,
+                        line_height_tolerance=12,
+                        char_spacing_max=20,
+                        min_button_width=180,
+                        min_button_height=10,
+                        max_button_height=110,
+                        min_aspect_ratio=6.0,
+                        min_char_count=8,
+                        padding_left=10,
+                        padding_top=2,
+                        padding_right=100,
+                        padding_bottom=2,
+                        merge_same_line=True,
                     )
-                    clustered_rects = short_label_rects
+                    if len(relaxed_rects) > len(clustered_rects):
+                        logger.info(
+                            "    Relaxed clustering improved %d → %d buttons",
+                            len(clustered_rects),
+                            len(relaxed_rects),
+                        )
+                        clustered_rects = relaxed_rects
+
+                # Final fallback for very short labels on low-count menus.
+                if len(clustered_rects) < expected and expected <= 10:
+                    short_label_rects = cluster_character_rects_into_buttons(
+                        small_components,
+                        line_height_tolerance=12,
+                        char_spacing_max=20,
+                        min_button_width=80,
+                        min_button_height=10,
+                        max_button_height=120,
+                        min_aspect_ratio=3.0,
+                        min_char_count=4,
+                        padding_left=10,
+                        padding_top=2,
+                        padding_right=60,
+                        padding_bottom=2,
+                        merge_same_line=True,
+                        trim_right_small_group=True,
+                        trim_right_gap_threshold=160,
+                        trim_right_max_width=180,
+                        trim_left_small_group=True,
+                        trim_left_gap_threshold=90,
+                        trim_left_max_width=150,
+                    )
+                    if len(short_label_rects) > len(clustered_rects):
+                        logger.info(
+                            "    Short-label clustering improved %d → %d buttons",
+                            len(clustered_rects),
+                            len(short_label_rects),
+                        )
+                        clustered_rects = short_label_rects
+
+                component_rects_for_split = small_components
             
             logger.info(f"    Clustered {len(small_components)} characters → {len(clustered_rects)} buttons")
             page_rects = clustered_rects
-            component_rects_for_split = small_components
             
             for idx, rect in enumerate(clustered_rects):
                 w, h = rect[2] - rect[0], rect[3] - rect[1]
@@ -1301,13 +1406,19 @@ def _extract_spu_button_rects(
             return ordered_rects
 
         if page_rects:
-            page_rects = _split_rows_into_columns(
-                page_rects,
-                bitmap.width,
-                component_rects=component_rects_for_split,
-            )
-            # Sort buttons on this page by vertical position (top to bottom, left to right)
-            page_rects.sort(key=lambda r: (r[1], r[0]))
+            if column_aware_clustering_used:
+                # Rects are already per-button in column-major order;
+                # skip the legacy band-based column splitter and
+                # the row-major re-sort that would destroy the ordering.
+                logger.info(f"    Skipping _split_rows_into_columns (column-aware clustering)")
+            else:
+                page_rects = _split_rows_into_columns(
+                    page_rects,
+                    bitmap.width,
+                    component_rects=component_rects_for_split,
+                )
+                # Sort buttons on this page by vertical position (top to bottom, left to right)
+                page_rects.sort(key=lambda r: (r[1], r[0]))
             page_buttons.append((page_index, page_rects))
             logger.info(f"    Page {page_index}: {len(page_rects)} button(s)")
     
@@ -1335,8 +1446,10 @@ def _extract_spu_button_rects(
         all_rects_ranked = sorted(all_rects_with_pages, key=lambda x: x[1][2] - x[1][0], reverse=True)
         all_rects_with_pages = all_rects_ranked[:expected]
         logger.info(f"  Kept {len(all_rects_with_pages)} widest buttons")
-        # Re-sort by page and position for consistent ordering
-        all_rects_with_pages.sort(key=lambda x: (x[0], x[1][1], x[1][0]))  # page, Y, X
+        if not any_column_aware:
+            # Re-sort by page and position for consistent ordering
+            # (skip when column-aware clustering already established the order)
+            all_rects_with_pages.sort(key=lambda x: (x[0], x[1][1], x[1][0]))  # page, Y, X
     
     for idx, (page_idx, rect) in enumerate(all_rects_with_pages):
         logger.info(f"  Button {idx+1} (page {page_idx}): ({rect[0]},{rect[1]})->({rect[2]},{rect[3]}) "
@@ -1443,79 +1556,33 @@ def _detect_menu_rects_multi_page(
         for page_idx, frames in enumerate(frame_pages):
             logger.info(f"    Page {page_idx}: {len(frames)} frames")
         
-        # Optional SPU/frame alignment: use OCR line boxes on the page's frame
-        # to estimate a single vertical offset for all SPU rects on that page.
-        # Optional: align SPU rects to visual text lines in each page frame.
+        # Align SPU rects to visual text lines in each page frame while
+        # preserving the ordering produced by _extract_spu_button_rects()
+        # (which is already column-major when column-aware clustering was used).
         page_rects_map: dict[int, list[tuple[int, int, int, int]]] = {}
-        for page_idx, rect in spu_results[:expected]:
+        page_rect_indices: dict[int, list[int]] = {}  # page -> original indices
+        for global_idx, (page_idx, rect) in enumerate(spu_results[:expected]):
             page_rects_map.setdefault(page_idx, []).append(rect)
-        aligned_rects_by_page: dict[int, list[tuple[int, int, int, int]]] = {}
+            page_rect_indices.setdefault(page_idx, []).append(global_idx)
+
+        # Align and regularize per page, then map back to original positions.
+        aligned_by_global_idx: dict[int, tuple[int, tuple[int, int, int, int]]] = {}
         for page_idx, rects in page_rects_map.items():
+            indices = page_rect_indices[page_idx]
             if page_idx < len(frame_pages) and frame_pages[page_idx]:
                 frame = frame_pages[page_idx][0]
-                aligned_rects = _align_spu_rects_to_frame(
-                    rects, frame
-                )
-                # Regularize heights when a page shows consistent button rows.
+                aligned_rects = _align_spu_rects_to_frame(rects, frame)
                 aligned_rects = _regularize_rect_heights(aligned_rects, frame)
-                # Order buttons by Y then X (row-major) to match visual reading order.
-                aligned_rects_by_page[page_idx] = sorted(
-                    aligned_rects, key=lambda r: (r[1], r[0])
-                )
             else:
-                aligned_rects_by_page[page_idx] = sorted(rects, key=lambda r: (r[1], r[0]))
+                aligned_rects = list(rects)
+            for i, g_idx in enumerate(indices):
+                aligned_by_global_idx[g_idx] = (page_idx, aligned_rects[i])
 
-        # Build a global row-major ordering from SPU rects (visual order),
-        # then enforce left/right pairing per row. This overrides BTN_IT order
-        # when SPU is present to match on-screen reading order.
-        ordered_spu_rects: list[tuple[int, tuple[int, int, int, int]]] = []
-        for page_idx in sorted(aligned_rects_by_page.keys()):
-            for rect in aligned_rects_by_page[page_idx]:
-                ordered_spu_rects.append((page_idx, rect))
-
-        # Group into rows by Y proximity, then ensure each row has up to two rects (L,R).
-        if ordered_spu_rects:
-            frame_w = max(r[2] for _, r in ordered_spu_rects) + 1
-            y_thresh = 20  # row clustering threshold
-            ordered_spu_rects.sort(key=lambda r: (r[1][1], r[1][0]))
-            rows: list[list[tuple[int, tuple[int, int, int, int]]]] = []
-            for item in ordered_spu_rects:
-                _, rect = item
-                placed = False
-                for row in rows:
-                    # Compare with first rect in row
-                    ry1, ry2 = row[0][1][1], row[0][1][3]
-                    if abs(rect[1] - ry1) <= y_thresh or abs(rect[3] - ry2) <= y_thresh:
-                        row.append(item)
-                        placed = True
-                        break
-                if not placed:
-                    rows.append([item])
-
-            paired: list[tuple[int, tuple[int, int, int, int]]] = []
-            for row in rows:
-                row.sort(key=lambda r: r[1][0])  # left to right
-                if len(row) == 1:
-                    page_idx, rect = row[0]
-                    x1, y1, x2, y2 = rect
-                    center = (x1 + x2) / 2
-                    width = x2 - x1 + 1
-                    # If the single rect is clearly on the right, synthesize a left companion without splitting the right.
-                    if center > frame_w * 0.55:
-                        synth_w = min(max(150, width), frame_w // 2)
-                        left_rect = (max(0, x1 - synth_w), y1, max(0, x1 - 10), y2)
-                        # Validate minimum width
-                        if (left_rect[2] - left_rect[0]) >= 60:
-                            paired.append((page_idx, left_rect))
-                            paired.append((page_idx, rect))
-                        else:
-                            paired.append((page_idx, rect))
-                    else:
-                        paired.append((page_idx, rect))
-                else:
-                    paired.extend(row[:2])  # keep first two (L,R)
-
-            ordered_spu_rects = paired[:expected]
+        # Rebuild the ordered list preserving the original ordering.
+        ordered_spu_rects: list[tuple[int, tuple[int, int, int, int]]] = [
+            aligned_by_global_idx[g_idx]
+            for g_idx in sorted(aligned_by_global_idx.keys())
+        ]
 
         # Map each ordered rect to frame and mask.
         result: dict[int, tuple[Path, tuple[int, int, int, int]]] = {}
@@ -2995,40 +3062,28 @@ def run(
                         if header_candidates
                         else None
                     )
-                    center = frame_w // 2
-                    left = sorted(
-                        [r for r in rects if r is not header_rect and ((r[0] + r[2]) / 2) < center],
-                        key=lambda r: (r[1], r[0]),
-                    )
-                    right = sorted(
-                        [r for r in rects if r is not header_rect and ((r[0] + r[2]) / 2) >= center],
-                        key=lambda r: (r[1], r[0]),
-                    )
                     ordered_rects: list[tuple[int, int, int, int]] = []
                     if header_rect:
                         ordered_rects.append(header_rect)
-                    ordered_rects.extend(left)
-                    ordered_rects.extend(right)
+                    rows: list[list[tuple[int, int, int, int]]] = []
+                    y_thresh = 20
+                    for rect in rects:
+                        if rect is header_rect:
+                            continue
+                        placed = False
+                        for row in rows:
+                            ry1, ry2 = row[0][1], row[0][3]
+                            if abs(rect[1] - ry1) <= y_thresh or abs(rect[3] - ry2) <= y_thresh:
+                                row.append(rect)
+                                placed = True
+                                break
+                        if not placed:
+                            rows.append([rect])
+                    rows.sort(key=lambda r: r[0][1])
+                    for row in rows:
+                        row.sort(key=lambda r: r[0])
+                        ordered_rects.extend(row)
                     rects = ordered_rects
-                    # If these rects came from multi-page/SPU detection, keep frame/mask maps aligned.
-                    if menu_id in button_frame_map:
-                        new_frame_map: dict[int, Path] = {}
-                        new_mask_map: dict[int, Path] = {}
-                        for new_idx, rect in enumerate(rects):
-                            old_idx = None
-                            for idx, old_rect in enumerate(original_rects):
-                                if old_rect == rect:
-                                    old_idx = idx
-                                    break
-                            if old_idx is None:
-                                continue
-                            if old_idx in button_frame_map[menu_id]:
-                                new_frame_map[new_idx] = button_frame_map[menu_id][old_idx]
-                            if menu_id in button_mask_map and old_idx in button_mask_map[menu_id]:
-                                new_mask_map[new_idx] = button_mask_map[menu_id][old_idx]
-                        button_frame_map[menu_id] = new_frame_map
-                        if menu_id in button_mask_map:
-                            button_mask_map[menu_id] = new_mask_map
                     logger.info(
                         "menu_images: raw detected rects for %s: %s",
                         menu_id,
@@ -3079,13 +3134,13 @@ def run(
                         expanded_rects,
                     )
                     # Restore original order by button index
-                    original_order_rects = []
-                    for orig_rect in rects:
+                    nav_order_rects = []
+                    for orig_rect in original_rects:
                         for exp_rect in expanded_rects:
                             if exp_rect[0] == orig_rect[0] and exp_rect[1] == orig_rect[1]:
-                                original_order_rects.append(exp_rect)
+                                nav_order_rects.append(exp_rect)
                                 break
-                    fallback_rects[menu_id] = original_order_rects
+                    fallback_rects[menu_id] = nav_order_rects
                     logger.info(
                         "menu_images: detected %d rects from video for %s",
                         len(expanded_rects),
